@@ -1,0 +1,181 @@
+# =========================================================================
+# TrueView AI – Comprehensive Git Ignore Rules
+# Covers Node.js backend, React frontend, FastAPI Python AI service, OS/IDEs, 
+# databases, logs, and sensitive security files/secrets.
+# =========================================================================
+
+# ─────────────────────────────────────────────────────────────────────────
+# Secrets & Environment Variables (CRITICAL)
+# ─────────────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+*.env
+*.env.*
+config/*.env
+server/.env
+client/.env
+ai-service/.env
+
+# Security keys, certificates, and credentials
+*.pem
+*.key
+*.pub
+*.cert
+*.crt
+*.pfx
+*.p12
+*.asc
+*.gpg
+secrets/
+credentials.json
+client_secret*.json
+service-account*.json
+jwt-secret*
+jwt.secret
+
+# ─────────────────────────────────────────────────────────────────────────
+# Node.js (Backend & React Frontend)
+# ─────────────────────────────────────────────────────────────────────────
+node_modules/
+/server/node_modules/
+/client/node_modules/
+jspm_packages/
+web_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Frontend build outputs & caches
+dist/
+/client/dist/
+dist-ssr/
+build/
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+.npm/
+.yarn/
+.pnpm-store/
+
+# ─────────────────────────────────────────────────────────────────────────
+# Python (AI Service)
+# ─────────────────────────────────────────────────────────────────────────
+__pycache__/
+/ai-service/__pycache__/
+/ai-service/**/*.py[cod]
+/ai-service/**/$py.class
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+/ai-service/.venv/
+/ai-service/venv/
+/ai-service/env/
+
+# Build and distribution
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyTest, coverage, and documentation
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.tox/
+.nox/
+
+# ─────────────────────────────────────────────────────────────────────────
+# Large Machine Learning Models & Weights
+# ─────────────────────────────────────────────────────────────────────────
+# Ignore large binary weights/model checkpoints
+*.pt
+*.pth
+*.pb
+*.onnx
+# EXCEPT YuNet face detector which is required by Phase 7 and pre-committed
+!/ai-service/face_detection/models/face_detection_yunet_2023mar.onnx
+*.bin
+*.weights
+*.h5
+*.tflite
+*.model
+*.ckpt
+*.safetensors
+
+# ─────────────────────────────────────────────────────────────────────────
+# Databases & Local Storage
+# ─────────────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.ldb
+*.log
+.mongodb/
+.mongo/
+dump/
+/server/db_backup/
+
+# ─────────────────────────────────────────────────────────────────────────
+# OS & IDE Configuration
+# ─────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# IDE settings
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+.history/
+.project
+.classpath
+.settings/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.suo
