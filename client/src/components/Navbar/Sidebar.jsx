@@ -2,12 +2,12 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Eye, Users, FileText, Bell, BarChart3,
   UserCog, Settings, ChevronLeft, ChevronRight, Shield, Sparkles,
-  UserCheck, ScanFace, Scan, Focus
+  UserCheck, ScanFace, Scan, Focus, Compass, Mic, Boxes, Activity
 } from 'lucide-react';
 import { cn } from '../../utils/helpers';
 import { useAuth } from '../../context/AuthContext';
 
-const iconMap = { LayoutDashboard, Eye, Users, FileText, Bell, BarChart3, UserCog, Settings, UserCheck, ScanFace, Scan, Focus };
+const iconMap = { LayoutDashboard, Eye, Users, FileText, Bell, BarChart3, UserCog, Settings, UserCheck, ScanFace, Scan, Focus, Compass, Mic, Boxes, Activity };
 
 const baseNavItems = [
   { path: '/', label: 'Dashboard', icon: 'LayoutDashboard' },
@@ -20,6 +20,10 @@ const baseNavItems = [
   { path: '/verify-identity', label: 'Verify Identity', icon: 'UserCheck' },
   { path: '/face-mesh', label: 'Face Mesh', icon: 'Scan' },
   { path: '/eye-gaze', label: 'Eye Gaze', icon: 'Focus' },
+  { path: '/head-pose', label: 'Head Pose', icon: 'Compass' },
+  { path: '/voice-activity', label: 'Voice VAD', icon: 'Mic' },
+  { path: '/object-detection', label: 'Object Scan', icon: 'Boxes' },
+  { path: '/behaviour-analysis', label: 'Behaviour Control', icon: 'Activity' },
   { path: '/settings', label: 'Settings', icon: 'Settings' },
 ];
 

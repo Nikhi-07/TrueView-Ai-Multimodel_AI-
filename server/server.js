@@ -11,6 +11,10 @@ const cameraRoutes = require('./routes/cameraRoutes');
 const livenessRoutes = require('./routes/livenessRoutes');
 const faceMeshRoutes = require('./routes/faceMeshRoutes');
 const eyeGazeRoutes = require('./routes/eyeGazeRoutes');
+const headPoseRoutes = require('./routes/headPoseRoutes');
+const voiceRoutes = require('./routes/voiceRoutes');
+const objectDetectionRoutes = require('./routes/objectDetectionRoutes');
+const behaviourRoutes = require('./routes/behaviourRoutes');
 
 // Middleware
 const { errorHandler } = require('./middleware/errorHandler');
@@ -46,6 +50,10 @@ app.use('/api/camera', cameraRoutes);
 app.use('/api/liveness', livenessRoutes);
 app.use('/api/face-mesh', faceMeshRoutes);
 app.use('/api/eye-gaze', eyeGazeRoutes);
+app.use('/api/head-pose', headPoseRoutes);
+app.use('/api/voice', voiceRoutes);
+app.use('/api/object-detection', objectDetectionRoutes);
+app.use('/api/behaviour', behaviourRoutes);
 
 // Basic route for testing
 app.get('/', (req, res) => {

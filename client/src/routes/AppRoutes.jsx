@@ -24,6 +24,10 @@ import FaceRegistration from '../pages/FaceRegistration';
 import LiveVerification from '../pages/LiveVerification';
 import FaceMeshViewer from '../pages/FaceMeshViewer';
 import EyeGazeViewer from '../pages/EyeGazeViewer';
+import HeadPoseViewer from '../pages/HeadPoseViewer';
+import VoiceActivityViewer from '../pages/VoiceActivityViewer';
+import ObjectDetectionViewer from '../pages/ObjectDetectionViewer';
+import BehaviourAnalysisViewer from '../pages/BehaviourAnalysisViewer';
 
 export default function AppRoutes() {
   const { isAuthenticated } = useAuth();
@@ -62,6 +66,10 @@ export default function AppRoutes() {
             <Route path="/verify-identity" element={<LiveVerification />} />
             <Route path="/face-mesh" element={<FaceMeshViewer />} />
             <Route path="/eye-gaze" element={<EyeGazeViewer />} />
+            <Route path="/head-pose" element={<HeadPoseViewer />} />
+            <Route path="/voice-activity" element={<VoiceActivityViewer />} />
+            <Route path="/object-detection" element={<ObjectDetectionViewer />} />
+            <Route path="/behaviour-analysis" element={<BehaviourAnalysisViewer />} />
           </Route>
         </Route>
         
