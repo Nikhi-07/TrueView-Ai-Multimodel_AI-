@@ -1,8 +1,8 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
 @layer base {
   * {
@@ -13,11 +13,20 @@
 
   html {
     scroll-behavior: smooth;
+    background-color: #ffffff;
+    color: #000000;
   }
 
   body {
-    @apply bg-surface-950 text-gray-100 font-sans antialiased;
+    background-color: #ffffff;
+    color: #000000;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6, p, span, div, label, input, select, button, td, th {
+    color: #000000;
   }
 
   /* Custom Scrollbar */
@@ -27,147 +36,90 @@
   }
 
   ::-webkit-scrollbar-track {
-    @apply bg-surface-900;
+    background: #ffffff;
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-surface-600 rounded-full;
-    transition: background 0.2s;
+    background: #d1d5db;
+    border-radius: 9999px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-surface-700;
+    background: #9ca3af;
   }
 }
 
 @layer components {
-  /* Glassmorphism Cards */
+  /* True White Cards with Sharp Borders */
   .glass {
-    @apply bg-white/[0.03] backdrop-blur-xl border border-white/[0.06] rounded-2xl;
+    background-color: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   }
 
   .glass-strong {
-    @apply bg-white/[0.06] backdrop-blur-2xl border border-white/[0.08] rounded-2xl;
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+    box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.05);
   }
 
   .glass-hover {
-    @apply glass transition-all duration-300;
+    @apply glass transition-all duration-150;
   }
   .glass-hover:hover {
-    @apply bg-white/[0.06] border-white/[0.10] shadow-lg shadow-primary-500/5;
+    border-color: #000000;
   }
 
-  /* Gradient Borders */
-  .gradient-border {
-    position: relative;
-  }
-  .gradient-border::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    padding: 1px;
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(6, 182, 212, 0.3));
-    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    pointer-events: none;
-  }
-
-  /* Button Styles */
+  /* Pure Black & White Buttons */
   .btn-primary {
-    @apply px-5 py-2.5 bg-primary-500 hover:bg-primary-600 text-white font-medium rounded-xl
-           transition-all duration-200 active:scale-[0.98]
-           shadow-lg shadow-primary-500/20 hover:shadow-primary-500/30;
+    @apply px-4 py-2 bg-black hover:bg-gray-800 text-white font-semibold rounded-lg
+           transition-all duration-150 active:scale-[0.99];
   }
 
   .btn-ghost {
-    @apply px-5 py-2.5 bg-white/[0.03] hover:bg-white/[0.08] text-gray-300 font-medium rounded-xl
-           border border-white/[0.06] hover:border-white/[0.12] transition-all duration-200;
+    @apply px-4 py-2 bg-white hover:bg-gray-100 text-black font-semibold rounded-lg
+           border border-gray-300 hover:border-black transition-all duration-150;
   }
 
   .btn-danger {
-    @apply px-5 py-2.5 bg-danger-500/20 hover:bg-danger-500/30 text-danger-400 font-medium rounded-xl
-           border border-danger-500/20 transition-all duration-200;
+    @apply px-4 py-2 bg-red-50 hover:bg-red-100 text-red-700 font-semibold rounded-lg
+           border border-red-300 transition-all duration-150;
   }
 
-  /* Input Styles */
+  /* Inputs */
   .input-glass {
-    @apply w-full px-4 py-3 bg-white/[0.03] border border-white/[0.08] rounded-xl
-           text-gray-100 placeholder-gray-500
-           focus:outline-none focus:border-primary-500/50 focus:bg-white/[0.05]
-           focus:ring-2 focus:ring-primary-500/20 transition-all duration-200;
+    @apply w-full px-3.5 py-2.5 bg-white border border-gray-300 rounded-lg
+           text-black placeholder-gray-500
+           focus:outline-none focus:border-black focus:ring-1 focus:ring-black
+           transition-all duration-150;
   }
 
   /* Nav Item */
   .nav-item {
-    @apply flex items-center gap-3 px-4 py-3 rounded-xl text-gray-400
-           hover:text-gray-200 hover:bg-white/[0.04] transition-all duration-200 cursor-pointer;
+    @apply flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-black font-medium
+           hover:bg-gray-100 transition-all duration-150 cursor-pointer;
   }
 
   .nav-item.active {
-    @apply text-primary-400 bg-primary-500/[0.08] border border-primary-500/[0.15];
-    box-shadow: 0 0 20px rgba(59, 130, 246, 0.08);
+    @apply text-black bg-gray-200 font-bold border-l-4 border-black rounded-r-lg rounded-l-none;
   }
 
-  /* Page Transitions */
-  .page-enter {
-    @apply animate-fade-in;
+  /* Status Badges */
+  .badge-success {
+    @apply bg-emerald-100 text-emerald-950 border border-emerald-300 font-bold text-xs px-2.5 py-0.5 rounded-md;
   }
 
-  /* Shimmer Placeholder */
-  .shimmer {
-    @apply relative overflow-hidden;
-    background: linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.02) 25%,
-      rgba(255, 255, 255, 0.06) 50%,
-      rgba(255, 255, 255, 0.02) 75%
-    );
-    background-size: 200% 100%;
-    animation: shimmer 2s linear infinite;
+  .badge-warning {
+    @apply bg-amber-100 text-amber-950 border border-amber-300 font-bold text-xs px-2.5 py-0.5 rounded-md;
   }
 
-  /* Status Dot */
-  .status-dot {
-    @apply w-2 h-2 rounded-full;
+  .badge-danger {
+    @apply bg-red-100 text-red-950 border border-red-300 font-bold text-xs px-2.5 py-0.5 rounded-md;
   }
 
-  .status-dot.online {
-    @apply bg-success-400;
-    box-shadow: 0 0 8px rgba(52, 211, 153, 0.5);
-  }
-
-  .status-dot.warning {
-    @apply bg-warning-400;
-    box-shadow: 0 0 8px rgba(251, 191, 36, 0.5);
-  }
-
-  .status-dot.danger {
-    @apply bg-danger-400;
-    box-shadow: 0 0 8px rgba(248, 113, 113, 0.5);
-  }
-
-  .status-dot.offline {
-    @apply bg-gray-500;
-  }
-}
-
-@layer utilities {
-  .text-gradient {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary-400 to-accent-400;
-  }
-
-  .bg-grid {
-    background-image: 
-      linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-    background-size: 40px 40px;
-  }
-
-  .bg-dots {
-    background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-    background-size: 20px 20px;
+  .badge-neutral {
+    @apply bg-gray-100 text-black border border-gray-300 font-bold text-xs px-2.5 py-0.5 rounded-md;
   }
 }

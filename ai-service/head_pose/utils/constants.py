@@ -28,12 +28,12 @@ LANDMARK_INDEX_RIGHT_MOUTH = 48  # Person's right mouth corner (viewer's left)
 # Centered at the nose tip (0.0, 0.0, 0.0) in millimeters.
 # ──────────────────────────────────────────────
 FACE_3D_MODEL_POINTS = np.array([
-    (0.0, 0.0, 0.0),             # Nose Tip
-    (0.0, -330.0, -65.0),        # Chin
-    (-225.0, 170.0, -135.0),     # Right Eye Outer Corner (Viewer's Left)
-    (225.0, 170.0, -135.0),      # Left Eye Outer Corner (Viewer's Right)
-    (-150.0, -150.0, -125.0),    # Right Mouth Corner (Viewer's Left)
-    (150.0, -150.0, -125.0)      # Left Mouth Corner (Viewer's Right)
+    (0.0, 0.0, 0.0),             # Nose Tip (30)
+    (0.0, 330.0, -65.0),         # Chin (8)
+    (-225.0, -170.0, -135.0),    # Right Eye Outer Corner (Viewer's Left) (36)
+    (225.0, -170.0, -135.0),     # Left Eye Outer Corner (Viewer's Right) (45)
+    (-150.0, 150.0, -125.0),     # Right Mouth Corner (Viewer's Left) (48)
+    (150.0, 150.0, -125.0)       # Left Mouth Corner (Viewer's Right) (54)
 ], dtype=np.float64)
 
 # ──────────────────────────────────────────────

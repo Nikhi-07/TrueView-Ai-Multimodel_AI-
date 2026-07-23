@@ -19,12 +19,15 @@ TARGET_CLASSES_MAP = {
     0: "person",
     62: "monitor",
     63: "laptop",
+    64: "mouse",
+    65: "remote",
+    66: "keyboard",
     67: "phone",
     73: "book"
 }
 
 # Configurable list of classes we want to alert on/track
-PROHIBITED_CLASSES = ["phone", "book"]
+PROHIBITED_CLASSES = ["phone", "book", "remote", "laptop"]
 
 # ──────────────────────────────────────────────
 # Model Configurations
@@ -32,8 +35,8 @@ PROHIBITED_CLASSES = ["phone", "book"]
 # Default YOLO model name (Ultralytics auto-downloads this)
 DEFAULT_YOLO_MODEL = "yolo11n.pt"  # Lightweight nano model for real-time FPS
 
-# Confidence threshold to register a valid detection
-DEFAULT_CONFIDENCE_THRESHOLD = 0.35
+# Confidence threshold to register a valid detection (lowered to 0.20 for partial visibility)
+DEFAULT_CONFIDENCE_THRESHOLD = 0.20
 
 # Intersection over Union (IoU) threshold for Non-Maximum Suppression (NMS)
 DEFAULT_IOU_THRESHOLD = 0.45

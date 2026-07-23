@@ -15,6 +15,10 @@ const headPoseRoutes = require('./routes/headPoseRoutes');
 const voiceRoutes = require('./routes/voiceRoutes');
 const objectDetectionRoutes = require('./routes/objectDetectionRoutes');
 const behaviourRoutes = require('./routes/behaviourRoutes');
+const decisionRoutes = require('./routes/decisionRoutes');
+const unifiedRoutes = require('./routes/unifiedRoutes');
+const roomRoutes = require('./routes/roomRoutes');
+const reportRoutes = require('./routes/reportRoutes');
 
 // Middleware
 const { errorHandler } = require('./middleware/errorHandler');
@@ -54,6 +58,10 @@ app.use('/api/head-pose', headPoseRoutes);
 app.use('/api/voice', voiceRoutes);
 app.use('/api/object-detection', objectDetectionRoutes);
 app.use('/api/behaviour', behaviourRoutes);
+app.use('/api/decision', decisionRoutes);
+app.use('/api/ai-engine', unifiedRoutes);
+app.use('/api/rooms', roomRoutes);
+app.use('/api/reports', reportRoutes);
 
 // Basic route for testing
 app.get('/', (req, res) => {

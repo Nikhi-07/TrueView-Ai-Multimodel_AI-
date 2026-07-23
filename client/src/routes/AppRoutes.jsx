@@ -28,6 +28,8 @@ import HeadPoseViewer from '../pages/HeadPoseViewer';
 import VoiceActivityViewer from '../pages/VoiceActivityViewer';
 import ObjectDetectionViewer from '../pages/ObjectDetectionViewer';
 import BehaviourAnalysisViewer from '../pages/BehaviourAnalysisViewer';
+import DecisionEngineViewer from '../pages/DecisionEngineViewer';
+import RoomManager from '../pages/RoomManager';
 
 export default function AppRoutes() {
   const { isAuthenticated } = useAuth();
@@ -48,6 +50,7 @@ export default function AppRoutes() {
         <Route element={<ProtectedRoute />}>
           <Route element={<DashboardLayout />}>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/rooms" element={<RoomManager />} />
             <Route path="/monitoring" element={<LiveMonitoring />} />
             <Route path="/sessions" element={<Sessions />} />
             <Route path="/reports" element={<Reports />} />
@@ -70,6 +73,7 @@ export default function AppRoutes() {
             <Route path="/voice-activity" element={<VoiceActivityViewer />} />
             <Route path="/object-detection" element={<ObjectDetectionViewer />} />
             <Route path="/behaviour-analysis" element={<BehaviourAnalysisViewer />} />
+            <Route path="/decision-engine" element={<DecisionEngineViewer />} />
           </Route>
         </Route>
         

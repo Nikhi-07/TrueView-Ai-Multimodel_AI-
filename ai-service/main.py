@@ -14,6 +14,8 @@ from head_pose.api.router import router as head_pose_router
 from voice_detection.api.router import router as voice_detection_router
 from object_detection.api.router import router as object_detection_router
 from behaviour_analysis.api.router import router as behaviour_analysis_router
+from decision_engine.api.router import router as decision_engine_router
+from trueview_engine.api.monitoring_api import router as unified_ai_router
 
 app = FastAPI(
     title="TrueView AI Service",
@@ -42,6 +44,8 @@ app.include_router(head_pose_router, prefix="/api/head-pose", tags=["Head Pose"]
 app.include_router(voice_detection_router, prefix="/api/voice-detection", tags=["Voice Detection"])
 app.include_router(object_detection_router, prefix="/api/object-detection", tags=["Object Detection"])
 app.include_router(behaviour_analysis_router, prefix="/api/behaviour-analysis", tags=["Behaviour Analysis"])
+app.include_router(decision_engine_router, prefix="/api/decision-engine", tags=["Decision Engine"])
+app.include_router(unified_ai_router, prefix="/api/ai", tags=["TrueView AI Engine"])
 
 if __name__ == "__main__":
     import uvicorn

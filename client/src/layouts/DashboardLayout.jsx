@@ -4,15 +4,12 @@ import Sidebar from '../components/Navbar/Sidebar';
 import Navbar from '../components/Navbar/Navbar';
 import { cn } from '../utils/helpers';
 
-/**
- * DashboardLayout – Main authenticated layout with sidebar + navbar + content area.
- */
 export default function DashboardLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-surface-950 bg-dots">
+    <div className="min-h-screen bg-white text-black font-sans">
       {/* Sidebar */}
       <Sidebar
         collapsed={sidebarCollapsed}
@@ -30,14 +27,14 @@ export default function DashboardLayout() {
       {/* Main area */}
       <div
         className={cn(
-          'transition-all duration-300',
-          sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-[272px]'
+          'transition-all duration-300 bg-white',
+          sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-[260px]'
         )}
       >
         <Navbar onMenuToggle={() => setMobileMenuOpen(!mobileMenuOpen)} />
         
         {/* Page content */}
-        <main className="p-6 min-h-[calc(100vh-4rem)]">
+        <main className="p-6 min-h-[calc(100vh-4rem)] bg-white text-black">
           <div className="page-enter">
             <Outlet />
           </div>

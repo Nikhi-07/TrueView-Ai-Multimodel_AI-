@@ -30,25 +30,25 @@ export default function Login() {
 
   return (
     <div>
-      <h2 className="text-xl font-bold text-gray-100 mb-1">Welcome back</h2>
-      <p className="text-sm text-gray-500 mb-6">Sign in to your TrueView AI account</p>
+      <h2 className="text-xl font-extrabold text-black mb-1">Welcome back</h2>
+      <p className="text-xs font-semibold text-black mb-6">Sign in to your TrueView AI account</p>
       
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="text-xs text-gray-400 block mb-1.5">Email</label>
+          <label className="text-xs font-bold text-black block mb-1.5">Email Address</label>
           <input 
             type="email" 
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
-            placeholder="admin@trueview.ai" 
-            className="input-glass text-sm" 
+            placeholder="tarun@gmail.com" 
+            className="w-full px-3.5 py-2.5 bg-white border border-gray-300 rounded-lg text-black font-semibold placeholder-gray-400 focus:outline-none focus:border-black focus:ring-1 focus:ring-black text-sm" 
             disabled={isSubmitting}
           />
         </div>
         
         <div>
-          <label className="text-xs text-gray-400 block mb-1.5">Password</label>
+          <label className="text-xs font-bold text-black block mb-1.5">Password</label>
           <div className="relative">
             <input 
               type={showPassword ? "text" : "password"}
@@ -56,13 +56,13 @@ export default function Login() {
               onChange={(e) => setPassword(e.target.value)}
               required
               placeholder="••••••••" 
-              className="input-glass text-sm pr-10" 
+              className="w-full px-3.5 py-2.5 bg-white border border-gray-300 rounded-lg text-black font-semibold placeholder-gray-400 focus:outline-none focus:border-black focus:ring-1 focus:ring-black text-sm pr-10" 
               disabled={isSubmitting}
             />
             <button 
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-black hover:text-gray-700 transition-colors"
             >
               {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
@@ -70,10 +70,10 @@ export default function Login() {
         </div>
         
         <div className="flex items-center justify-between">
-          <label className="flex items-center gap-2 text-xs text-gray-500 cursor-pointer">
-            <input type="checkbox" className="accent-primary-500" disabled={isSubmitting} /> Remember me
+          <label className="flex items-center gap-2 text-xs font-semibold text-black cursor-pointer">
+            <input type="checkbox" className="accent-black" disabled={isSubmitting} /> Remember me
           </label>
-          <Link to="/forgot-password" className="text-xs text-primary-400 hover:text-primary-300 transition-colors">
+          <Link to="/forgot-password" className="text-xs font-bold text-black hover:underline transition-colors">
             Forgot password?
           </Link>
         </div>
@@ -81,15 +81,15 @@ export default function Login() {
         <button 
           type="submit" 
           disabled={isSubmitting || !email || !password}
-          className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full py-2.5 bg-black hover:bg-gray-800 text-white font-bold rounded-lg flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm shadow-md"
         >
           {isSubmitting ? <LoadingSpinner size="sm" /> : <><LogIn size={16} /> Sign In</>}
         </button>
       </form>
       
-      <p className="text-center text-xs text-gray-500 mt-5">
+      <p className="text-center text-xs font-semibold text-black mt-5">
         Don't have an account?{' '}
-        <Link to="/register" className="text-primary-400 hover:text-primary-300 transition-colors">Create one</Link>
+        <Link to="/register" className="font-extrabold text-black underline hover:text-gray-700 transition-colors">Create one</Link>
       </p>
     </div>
   );

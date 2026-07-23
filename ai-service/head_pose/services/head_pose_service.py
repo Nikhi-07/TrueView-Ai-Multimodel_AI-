@@ -94,7 +94,7 @@ class HeadPoseService:
         reference_points = pose_result["reference_points_2d"]
         
         # 4. Decompose angles to Euler format (Pitch, Yaw, Roll)
-        pitch, yaw, roll = self.rotation_decomposer.decompose(rvec)
+        pitch, yaw, roll = self.rotation_decomposer.decompose(rvec, landmarks)
         
         # 5. Classify head orientation
         class_result = self.orientation_classifier.classify(pitch, yaw, roll)

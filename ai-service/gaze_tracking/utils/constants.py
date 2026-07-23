@@ -54,10 +54,10 @@ class AttentionStatus:
 #  ◄── LEFT ──── │ CENTER │ ──── RIGHT ──►
 #
 # ──────────────────────────────────────────────
-GAZE_HORIZONTAL_LEFT_THRESHOLD  = 0.35   # iris_x < this → looking LEFT
-GAZE_HORIZONTAL_RIGHT_THRESHOLD = 0.65   # iris_x > this → looking RIGHT
-GAZE_VERTICAL_UP_THRESHOLD      = 0.30   # iris_y < this → looking UP
-GAZE_VERTICAL_DOWN_THRESHOLD    = 0.70   # iris_y > this → looking DOWN
+GAZE_HORIZONTAL_LEFT_THRESHOLD  = 0.38   # iris_x < 0.38 → looking off-screen LEFT
+GAZE_HORIZONTAL_RIGHT_THRESHOLD = 0.62   # iris_x > 0.62 → looking off-screen RIGHT
+GAZE_VERTICAL_UP_THRESHOLD      = 0.32   # iris_y < 0.32 → looking off-screen UP
+GAZE_VERTICAL_DOWN_THRESHOLD    = 0.68   # iris_y > 0.68 → looking off-screen DOWN
 
 # Confidence scaling factors
 GAZE_CENTER_CONFIDENCE    = 0.95   # High confidence when centered
