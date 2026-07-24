@@ -168,11 +168,14 @@ class TrueViewEngine:
             pose.get("direction", "Looking Straight"), quality_eval
         )
 
+        prev_dist = self.event_state_machine._active_events.get(session_id, {}).get("looking_away", {})
+        prev_dur = prev_dist.get("duration", 0.0) if prev_dist.get("state") != "RESOLVED" else 0.0
+
         # Stage 6: Advanced Attention Intelligence
         attention_eval = self.attention_engine.evaluate(
             session_id, gaze.get("direction", "center"), pose.get("direction", "Looking Straight"),
             calibrated_pose_deltas, shared_face.get("face_detected", False), quality_eval,
-            0.0
+            prev_dur
         )
 
         # Stage 7: Multimodal Feature Fusion Layer
@@ -199,7 +202,7 @@ class TrueViewEngine:
             0.95, "Candidate not visible in view.", 2.0, quality_eval
         )
         st_dist = self.event_state_machine.update_condition(
-            session_id, "looking_away", fused_features["attention"]["status"] in ("PROLONGED_DISTRACTION", "REPEATED_DISTRACTION"),
+            session_id, "looking_away", fused_features["attention"]["status"] in ("PROLONGED_DISTRACTION", "REPEATED_DISTRACTION", "OFFSCREEN_GLANCE"),
             0.88, f"Candidate attention diverted ({fused_features['attention']['status']}).", 1.5, quality_eval
         )
         st_speak = self.event_state_machine.update_condition(
@@ -356,6 +359,7 @@ class TrueViewEngine:
         self.event_state_machine.reset(session_id)
         self.decision_engine.reset()
         self.session_manager.remove(session_id)
+        self._last_yolo_result = {"summary": {"person_count": 1, "phone_detected": False}, "detections": []}
 
     @staticmethod
     def _decode_image(image_data: str) -> Optional[np.ndarray]:

@@ -41,7 +41,7 @@ export default function AppRoutes() {
         <Route element={<AuthLayout />}>
           {/* Redirect to dashboard if already logged in */}
           <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : <Login />} />
-          <Route path="/register" element={isAuthenticated ? <Navigate to="/" /> : <Register />} />
+          <Route path="/register" element={isAuthenticated ? <Navigate to="/face-registration" /> : <Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
         </Route>
@@ -66,7 +66,8 @@ export default function AppRoutes() {
             <Route path="/profile" element={<Profile />} />
             <Route path="/help" element={<Help />} />
             <Route path="/face-registration" element={<FaceRegistration />} />
-            <Route path="/verify-identity" element={<LiveVerification />} />
+            <Route path="/session/:id/verify" element={<LiveVerification />} />
+            <Route path="/session/:id/monitor" element={<LiveMonitoring />} />
             <Route path="/face-mesh" element={<FaceMeshViewer />} />
             <Route path="/eye-gaze" element={<EyeGazeViewer />} />
             <Route path="/head-pose" element={<HeadPoseViewer />} />

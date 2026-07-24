@@ -345,7 +345,7 @@ export default function BehaviourAnalysisViewer() {
             {isActive && (
               <button
                 onClick={handleReset}
-                className="py-2 px-4 rounded-xl text-xs font-semibold bg-surface-800 hover:bg-surface-700 text-gray-200 border border-white/[0.06] transition-all"
+                className="py-2 px-4 rounded-xl text-xs font-semibold bg-gray-50 hover:bg-gray-50 text-black font-bold border border-gray-200 transition-all"
               >
                 Reset Session
               </button>
@@ -355,7 +355,7 @@ export default function BehaviourAnalysisViewer() {
               className={`py-2 px-4 rounded-xl font-medium flex items-center gap-2 transition-all ${
                 isActive
                   ? 'bg-danger-500/25 hover:bg-danger-500/35 text-danger-400 border border-danger-500/30'
-                  : 'bg-primary-500 hover:bg-primary-600 text-white'
+                  : 'bg-primary-500 hover:bg-primary-600 text-black font-bold'
               }`}
             >
               {isActive ? <Square size={16} /> : <Play size={16} />}
@@ -371,13 +371,13 @@ export default function BehaviourAnalysisViewer() {
         <div className="lg:col-span-8 space-y-6 flex flex-col min-h-0">
           
           {/* Attention Level Graph Card */}
-          <motion.div variants={item} className="glass p-5 rounded-2xl space-y-4">
+          <motion.div variants={item} className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <TrendingUp size={16} className="text-primary-400" />
-                <h3 className="text-sm font-bold text-gray-200">Attention Level History</h3>
+                <h3 className="text-sm font-bold text-black font-bold">Attention Level History</h3>
               </div>
-              <div className="text-xs font-bold text-gray-400 flex items-center gap-1.5">
+              <div className="text-xs font-bold text-gray-600 font-semibold flex items-center gap-1.5">
                 Current Level:
                 <span className={`px-2 py-0.5 rounded font-mono text-sm ${
                   analysisData.metrics.attention_pct >= 85.0
@@ -392,7 +392,7 @@ export default function BehaviourAnalysisViewer() {
             </div>
 
             {/* SVG Area Chart */}
-            <div className="h-28 bg-surface-950/60 rounded-xl relative overflow-hidden border border-white/[0.04] p-1.5">
+            <div className="h-28 bg-gray-50/60 rounded-xl relative overflow-hidden border border-gray-200 p-1.5">
               {isActive ? (
                 <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} className="w-full h-full" preserveAspectRatio="none">
                   <defs>
@@ -408,7 +408,7 @@ export default function BehaviourAnalysisViewer() {
                   <path d={lineData} fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               ) : (
-                <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500">
+                <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-600 font-semibold">
                   Graph offline. Start proctoring monitor to stream data points.
                 </div>
               )}
@@ -416,13 +416,13 @@ export default function BehaviourAnalysisViewer() {
           </motion.div>
 
           {/* Session Timeline Feed */}
-          <motion.div variants={item} className="glass p-5 rounded-2xl flex-1 flex flex-col min-h-[300px]">
+          <motion.div variants={item} className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl flex-1 flex flex-col min-h-[300px]">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <Clock size={16} className="text-primary-400" />
-                <h3 className="text-sm font-bold text-gray-200">Proctoring Timeline Log</h3>
+                <h3 className="text-sm font-bold text-black font-bold">Proctoring Timeline Log</h3>
               </div>
-              <span className="text-[10px] text-gray-500 font-bold bg-surface-800 px-2 py-0.5 rounded uppercase">
+              <span className="text-[10px] text-gray-600 font-semibold font-bold bg-gray-50 px-2 py-0.5 rounded uppercase">
                 Rolling Events
               </span>
             </div>
@@ -430,7 +430,7 @@ export default function BehaviourAnalysisViewer() {
             {isActive ? (
               <div className="flex-1 overflow-y-auto space-y-3 pr-1 text-xs max-h-[320px]">
                 {analysisData.timeline.length > 0 ? (
-                  <div className="space-y-3 relative border-l border-white/[0.06] ml-3 pl-5">
+                  <div className="space-y-3 relative border-l border-gray-200 ml-3 pl-5">
                     {analysisData.timeline.map((ev, index) => (
                       <div key={index} className="relative group">
                         
@@ -443,35 +443,35 @@ export default function BehaviourAnalysisViewer() {
                             : 'bg-primary-500'
                         }`} />
 
-                        <div className={`border rounded-xl p-3 flex items-start gap-4 transition-all hover:bg-surface-800/30 ${getSeverityStyles(ev.severity)}`}>
+                        <div className={`border rounded-xl p-3 flex items-start gap-4 transition-all hover:bg-gray-50/30 ${getSeverityStyles(ev.severity)}`}>
                           <div className="flex-1">
                             <div className="flex items-center justify-between">
-                              <h4 className="font-bold text-gray-200 capitalize">{ev.event_type}</h4>
-                              <div className="text-[10px] font-mono text-gray-500 flex items-center gap-2">
+                              <h4 className="font-bold text-black font-bold capitalize">{ev.event_type}</h4>
+                              <div className="text-[10px] font-mono text-gray-600 font-semibold flex items-center gap-2">
                                 <span>{ev.timestamp}</span>
                                 <span>•</span>
                                 <span>Duration: {ev.duration}s</span>
                               </div>
                             </div>
-                            <p className="text-[11px] text-gray-400 mt-1">{ev.description}</p>
+                            <p className="text-[11px] text-gray-600 font-semibold mt-1">{ev.description}</p>
                           </div>
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="h-full flex flex-col items-center justify-center text-gray-500 py-20 text-center">
+                  <div className="h-full flex flex-col items-center justify-center text-gray-600 font-semibold py-20 text-center">
                     <CheckCircle size={32} className="mb-2 text-emerald-500/80 animate-pulse" />
-                    <p className="font-semibold text-gray-400">No flags registered yet</p>
-                    <p className="text-[11px] text-gray-500 mt-0.5">Workspace activities are normal.</p>
+                    <p className="font-semibold text-gray-600 font-semibold">No flags registered yet</p>
+                    <p className="text-[11px] text-gray-600 font-semibold mt-0.5">Workspace activities are normal.</p>
                   </div>
                 )}
               </div>
             ) : (
-              <div className="flex-1 flex flex-col items-center justify-center text-gray-500 text-center py-20">
-                <ActivitySquare size={48} className="mb-3 text-surface-700 animate-pulse" />
-                <h4 className="text-sm font-bold text-gray-400">Timeline Offline</h4>
-                <p className="text-[11px] text-gray-500 mt-1 max-w-xs">
+              <div className="flex-1 flex flex-col items-center justify-center text-gray-600 font-semibold text-center py-20">
+                <ActivitySquare size={48} className="mb-3 text-gray-600 font-semibold animate-pulse" />
+                <h4 className="text-sm font-bold text-gray-600 font-semibold">Timeline Offline</h4>
+                <p className="text-[11px] text-gray-600 font-semibold mt-1 max-w-xs">
                   Initiate the proctor session to log live student behaviors and room changes.
                 </p>
               </div>
@@ -483,8 +483,8 @@ export default function BehaviourAnalysisViewer() {
         <div className="lg:col-span-4 space-y-6">
           
           {/* Live Proctor View Card */}
-          <motion.div variants={item} className="glass p-4 rounded-2xl space-y-4">
-            <div className="aspect-video bg-black rounded-xl overflow-hidden relative border border-white/[0.08] flex items-center justify-center">
+          <motion.div variants={item} className="bg-white border border-gray-200 shadow-sm p-4 rounded-2xl space-y-4">
+            <div className="aspect-video bg-black rounded-xl overflow-hidden relative border border-gray-200 flex items-center justify-center">
               <video
                 ref={videoRef}
                 autoPlay
@@ -493,9 +493,9 @@ export default function BehaviourAnalysisViewer() {
                 className={`w-full h-full object-cover ${isActive ? '' : 'hidden'}`}
               />
               {!isActive && (
-                <div className="text-center text-surface-600 p-4">
-                  <Shield size={36} className="mx-auto mb-2 text-surface-700" />
-                  <div className="text-xs font-semibold text-gray-400">Video Capture Off</div>
+                <div className="text-center text-gray-600 font-semibold p-4">
+                  <Shield size={36} className="mx-auto mb-2 text-gray-600 font-semibold" />
+                  <div className="text-xs font-semibold text-gray-600 font-semibold">Video Capture Off</div>
                 </div>
               )}
 
@@ -525,17 +525,17 @@ export default function BehaviourAnalysisViewer() {
           </motion.div>
 
           {/* Session Summary Statistics */}
-          <motion.div variants={item} className="glass p-5 rounded-2xl bg-gradient-to-br from-surface-900 to-surface-800 space-y-4">
+          <motion.div variants={item} className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl bg-gray-50 space-y-4">
             <div className="flex items-center gap-2">
               <Activity size={16} className="text-primary-400" />
-              <h3 className="text-sm font-bold text-gray-200">Compliance Summary</h3>
+              <h3 className="text-sm font-bold text-black font-bold">Compliance Summary</h3>
             </div>
 
             <div className="space-y-3.5 text-xs">
               
               {/* Insight Rating */}
-              <div className="flex justify-between items-center bg-surface-800/40 p-2.5 rounded-lg">
-                <span className="text-gray-400">Class Rating</span>
+              <div className="flex justify-between items-center bg-gray-50/40 p-2.5 rounded-lg">
+                <span className="text-gray-600 font-semibold">Class Rating</span>
                 <span className={`px-2 py-0.5 rounded font-extrabold text-[10px] uppercase ${
                   analysisData.session_summary.attention_rating === 'Excellent'
                     ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
@@ -546,37 +546,37 @@ export default function BehaviourAnalysisViewer() {
               </div>
 
               {/* Behavior Insight */}
-              <div className="flex justify-between items-center bg-surface-800/40 p-2.5 rounded-lg">
-                <span className="text-gray-400">Room Status</span>
-                <span className="font-bold text-gray-200">{analysisData.session_summary.behavioral_insight}</span>
+              <div className="flex justify-between items-center bg-gray-50/40 p-2.5 rounded-lg">
+                <span className="text-gray-600 font-semibold">Room Status</span>
+                <span className="font-bold text-black font-bold">{analysisData.session_summary.behavioral_insight}</span>
               </div>
 
               {/* Cumulative stats */}
               <div className="grid grid-cols-2 gap-2 text-center text-[10px] mt-2">
-                <div className="bg-surface-850 p-2.5 rounded-lg border border-white/[0.03]">
-                  <div className="text-gray-500 font-bold">Focus Time</div>
-                  <div className="text-sm font-extrabold font-mono text-gray-200 mt-0.5">
+                <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-200">
+                  <div className="text-gray-600 font-semibold font-bold">Focus Time</div>
+                  <div className="text-sm font-extrabold font-mono text-black font-bold mt-0.5">
                     {analysisData.metrics.focus_duration_seconds}s
                   </div>
                 </div>
 
-                <div className="bg-surface-850 p-2.5 rounded-lg border border-white/[0.03]">
-                  <div className="text-gray-500 font-bold">Speaking Time</div>
-                  <div className="text-sm font-extrabold font-mono text-gray-200 mt-0.5">
+                <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-200">
+                  <div className="text-gray-600 font-semibold font-bold">Speaking Time</div>
+                  <div className="text-sm font-extrabold font-mono text-black font-bold mt-0.5">
                     {analysisData.metrics.speaking_duration_seconds}s
                   </div>
                 </div>
 
-                <div className="bg-surface-850 p-2.5 rounded-lg border border-white/[0.03]">
-                  <div className="text-gray-500 font-bold">Look Away Count</div>
-                  <div className="text-sm font-extrabold font-mono text-gray-200 mt-0.5 text-warning-400">
+                <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-200">
+                  <div className="text-gray-600 font-semibold font-bold">Look Away Count</div>
+                  <div className="text-sm font-extrabold font-mono text-black font-bold mt-0.5 text-warning-400">
                     {analysisData.metrics.looking_away_count}
                   </div>
                 </div>
 
-                <div className="bg-surface-850 p-2.5 rounded-lg border border-white/[0.03]">
-                  <div className="text-gray-500 font-bold">Phones Detected</div>
-                  <div className="text-sm font-extrabold font-mono text-gray-200 mt-0.5 text-danger-400">
+                <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-200">
+                  <div className="text-gray-600 font-semibold font-bold">Phones Detected</div>
+                  <div className="text-sm font-extrabold font-mono text-black font-bold mt-0.5 text-danger-400">
                     {analysisData.metrics.phone_detection_count}
                   </div>
                 </div>

@@ -8,6 +8,7 @@ import StatCard from '../components/Cards/StatCard';
 import PageHeader from '../components/Cards/PageHeader';
 import Timeline from '../components/Cards/Timeline';
 import MetricGauge from '../components/Charts/MetricGauge';
+import api from '../services/api';
 
 export default function Dashboard() {
   const [stats, setStats] = useState({
@@ -28,8 +29,8 @@ export default function Dashboard() {
 
   const fetchDashboardStats = async () => {
     try {
-      const res = await fetch('/api/ai-engine/dashboard-stats');
-      const data = await res.json();
+      const res = await api.get('/ai-engine/dashboard-stats');
+      const data = res.data;
       if (data.success) {
         if (data.stats) setStats(data.stats);
         if (data.timeline) setTimelineItems(data.timeline);

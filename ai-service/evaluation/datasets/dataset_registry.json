@@ -1,0 +1,24 @@
+[
+  {
+    "name": "trueview_baseline_v1",
+    "purpose": "Baseline measurement of YOLO and Attention FP/FN rates",
+    "task": "Multimodal event confirmation",
+    "source": "Internal consenting beta testers (simulated)",
+    "license": "Proprietary",
+    "samples": 120,
+    "classes": ["phone", "multiple_persons", "distracted", "spoof"],
+    "usage": "Test",
+    "limitations": "Limited ethnic diversity, mostly well-lit rooms"
+  },
+  {
+    "name": "yolo_fp_hard_negatives",
+    "purpose": "Evaluate YOLO false positives on phone-like objects",
+    "task": "Object Detection FP reduction",
+    "source": "Web scraped CC-BY + TrueView test sets",
+    "license": "Mixed",
+    "samples": 500,
+    "classes": ["wallet", "remote", "calculator", "mouse", "black_book"],
+    "usage": "Validation",
+    "limitations": "Static images only, no temporal context"
+  }
+]

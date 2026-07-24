@@ -1,0 +1,14 @@
+{
+  "module": "YOLOv11 Object Detection",
+  "dataset": "yolo_fp_hard_negatives",
+  "samples": 500,
+  "threshold": 0.45,
+  "true_positives": 94,
+  "false_positives": 80,
+  "false_negatives": 6,
+  "true_negatives": 320,
+  "precision": 0.54,
+  "recall": 0.94,
+  "f1_score": 0.686,
+  "false_positive_rate": 0.2
+}

@@ -41,7 +41,8 @@ export default function Register() {
         password: formData.password,
         phone: formData.phone,
       });
-      navigate('/');
+      toast.success("Account created! Please register your face to continue.");
+      navigate('/face-registration');
     } catch (error) {
       // Error handled by context
     } finally {

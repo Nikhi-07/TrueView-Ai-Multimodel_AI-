@@ -170,7 +170,7 @@ export default function FaceMeshViewer() {
           <button 
             onClick={toggleCamera}
             className={`py-2 px-4 rounded-xl font-medium flex items-center gap-2 transition-all ${
-              isActive ? 'bg-danger-500/25 hover:bg-danger-500/35 text-danger-400 border border-danger-500/30' : 'bg-primary-500 hover:bg-primary-600 text-white'
+              isActive ? 'bg-danger-500/25 hover:bg-danger-500/35 text-danger-400 border border-danger-500/30' : 'bg-primary-500 hover:bg-primary-600 text-black font-bold'
             }`}
           >
             {isActive ? <Square size={16}/> : <Play size={16}/>}
@@ -182,7 +182,7 @@ export default function FaceMeshViewer() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 min-h-0">
         {/* Left Side: Stream Viewer */}
         <motion.div variants={item} className="lg:col-span-8 flex flex-col h-[500px] lg:h-auto">
-          <div className="glass flex-1 relative rounded-2xl overflow-hidden border-white/[0.1] h-full bg-black flex items-center justify-center">
+          <div className="bg-white border border-gray-200 shadow-sm flex-1 relative rounded-2xl overflow-hidden border-gray-200 h-full bg-black flex items-center justify-center">
             {/* Hidden raw video element used for capturing frames */}
             <video
               ref={videoRef}
@@ -207,10 +207,10 @@ export default function FaceMeshViewer() {
                 </div>
               </>
             ) : (
-              <div className="text-center text-surface-600 p-8 flex flex-col items-center">
-                <Shield size={64} className="mb-4 text-surface-700" />
-                <h3 className="text-lg font-medium text-gray-400">Stream Inactive</h3>
-                <p className="text-xs text-gray-500 max-w-xs mt-1">Start the mesh stream to visualize the AI facial landmark engine.</p>
+              <div className="text-center text-gray-600 font-semibold p-8 flex flex-col items-center">
+                <Shield size={64} className="mb-4 text-gray-600 font-semibold" />
+                <h3 className="text-lg font-medium text-gray-600 font-semibold">Stream Inactive</h3>
+                <p className="text-xs text-gray-600 font-semibold max-w-xs mt-1">Start the mesh stream to visualize the AI facial landmark engine.</p>
               </div>
             )}
 
@@ -226,16 +226,16 @@ export default function FaceMeshViewer() {
         {/* Right Side: Control Panel & Metrics */}
         <motion.div variants={item} className="lg:col-span-4 space-y-6">
           {/* Settings / Controls */}
-          <div className="glass p-5 rounded-2xl space-y-4">
+          <div className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl space-y-4">
             <div className="flex items-center gap-2 mb-2">
               <Settings size={16} className="text-primary-400" />
-              <h3 className="text-sm font-bold text-gray-200">Mesh Configuration</h3>
+              <h3 className="text-sm font-bold text-black font-bold">Mesh Configuration</h3>
             </div>
             
-            <div className="flex items-center justify-between py-2 border-b border-white/[0.06]">
+            <div className="flex items-center justify-between py-2 border-b border-gray-200">
               <div>
-                <div className="text-sm font-semibold text-gray-200">Show Mesh Edges</div>
-                <div className="text-[10px] text-gray-500">Render structural wireframe lines</div>
+                <div className="text-sm font-semibold text-black font-bold">Show Mesh Edges</div>
+                <div className="text-[10px] text-gray-600 font-semibold">Render structural wireframe lines</div>
               </div>
               <button 
                 onClick={() => setShowMesh(!showMesh)}
@@ -247,8 +247,8 @@ export default function FaceMeshViewer() {
 
             <div className="flex items-center justify-between py-2">
               <div>
-                <div className="text-sm font-semibold text-gray-200">Highlight Landmarks</div>
-                <div className="text-[10px] text-gray-500">Render individual keypoint coordinates</div>
+                <div className="text-sm font-semibold text-black font-bold">Highlight Landmarks</div>
+                <div className="text-[10px] text-gray-600 font-semibold">Render individual keypoint coordinates</div>
               </div>
               <button 
                 onClick={() => setShowDots(!showDots)}
@@ -260,9 +260,9 @@ export default function FaceMeshViewer() {
           </div>
 
           {/* Real-time Analytics Gauges */}
-          <div className="glass p-5 rounded-2xl bg-gradient-to-br from-surface-900 to-surface-800 space-y-6">
+          <div className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl bg-gray-50 space-y-6">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-gray-200">Detection Metrics</h3>
+              <h3 className="text-sm font-bold text-black font-bold">Detection Metrics</h3>
               <Activity size={16} className="text-primary-400" />
             </div>
 
@@ -276,30 +276,30 @@ export default function FaceMeshViewer() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-white/[0.06]">
+            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-200">
               <div className="text-center">
-                <div className="text-[10px] text-gray-500 uppercase font-mono">Landmarks</div>
-                <div className="text-xl font-bold font-mono text-gray-200 mt-1">
+                <div className="text-[10px] text-gray-600 font-semibold uppercase font-mono">Landmarks</div>
+                <div className="text-xl font-bold font-mono text-black font-bold mt-1">
                   {meshData.faceDetected ? meshData.landmarkCount : 0}
                 </div>
               </div>
               <div className="text-center">
-                <div className="text-[10px] text-gray-500 uppercase font-mono">Latency</div>
-                <div className="text-xl font-bold font-mono text-gray-200 mt-1">
+                <div className="text-[10px] text-gray-600 font-semibold uppercase font-mono">Latency</div>
+                <div className="text-xl font-bold font-mono text-black font-bold mt-1">
                   {meshData.faceDetected ? `${meshData.processingTimeMs}ms` : '0ms'}
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-white/[0.06]">
+            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-200">
               <div className="text-center">
-                <div className="text-[10px] text-gray-500 uppercase font-mono">Pipeline FPS</div>
-                <div className="text-xl font-bold font-mono text-gray-200 mt-1">
+                <div className="text-[10px] text-gray-600 font-semibold uppercase font-mono">Pipeline FPS</div>
+                <div className="text-xl font-bold font-mono text-black font-bold mt-1">
                   {isActive ? meshData.fps : 0}
                 </div>
               </div>
               <div className="text-center">
-                <div className="text-[10px] text-gray-500 uppercase font-mono">Status</div>
+                <div className="text-[10px] text-gray-600 font-semibold uppercase font-mono">Status</div>
                 <div className="mt-1 flex items-center justify-center">
                   <StatusBadge 
                     label={meshData.faceDetected ? "REAL" : "N/A"} 

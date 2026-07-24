@@ -38,7 +38,7 @@ function RiskGauge({ score, tierLabel, tierColor }) {
         <path
           d="M 20 100 A 80 80 0 0 1 180 100"
           fill="none"
-          stroke="rgba(255,255,255,0.08)"
+          stroke="rgba(0,0,0,0.1)"
           strokeWidth={stroke}
           strokeLinecap="round"
         />
@@ -54,10 +54,10 @@ function RiskGauge({ score, tierLabel, tierColor }) {
           style={{ transition: 'stroke-dashoffset 0.5s ease, stroke 0.5s ease' }}
         />
         {/* Score text */}
-        <text x="100" y="88" textAnchor="middle" fill="white" fontSize="32" fontWeight="700">
+        <text x="100" y="88" textAnchor="middle" fill="black" fontSize="32" fontWeight="700">
           {score}
         </text>
-        <text x="100" y="108" textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize="11">
+        <text x="100" y="108" textAnchor="middle" fill="rgba(0,0,0,0.5)" fontSize="11">
           / 100
         </text>
       </svg>
@@ -114,10 +114,10 @@ function ConfidenceBar({ label, icon: Icon, value }) {
       <Icon size={16} style={{ color, flexShrink: 0 }} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs text-white/60 truncate">{label}</span>
+          <span className="text-xs text-gray-600 font-semibold truncate">{label}</span>
           <span className="text-xs font-mono" style={{ color }}>{pct}%</span>
         </div>
-        <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+        <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
           <motion.div
             className="h-full rounded-full"
             style={{ backgroundColor: color }}
@@ -422,7 +422,7 @@ export default function DecisionEngineViewer() {
   const StatusIcon    = statusStyle.icon;
 
   // Card style helper
-  const cardClass = 'rounded-2xl border border-white/[0.06] bg-gradient-to-br from-white/[0.04] to-white/[0.01] backdrop-blur-md p-5';
+  const cardClass = 'rounded-2xl border border-gray-200 bg-white backdrop-blur-md p-5';
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -434,7 +434,7 @@ export default function DecisionEngineViewer() {
           <div className="flex gap-2">
             <button
               onClick={handleReset}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-white/5 hover:bg-white/10 text-white/70 border border-white/10 transition-all"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-gray-100 hover:bg-gray-100 text-gray-600 font-semibold border border-gray-200 transition-all"
             >
               <RefreshCw size={14} /> Reset
             </button>
@@ -462,7 +462,7 @@ export default function DecisionEngineViewer() {
         {/* Camera Feed */}
         <div className={cardClass}>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-white/80 text-sm font-semibold flex items-center gap-2">
+            <h3 className="text-gray-600 font-semibold text-sm font-semibold flex items-center gap-2">
               <Eye size={14} className="text-blue-400" /> Live Feed
             </h3>
             {isActive && (
@@ -471,7 +471,7 @@ export default function DecisionEngineViewer() {
               </span>
             )}
           </div>
-          <div className="relative aspect-video rounded-xl overflow-hidden bg-black/40 border border-white/5">
+          <div className="relative aspect-video rounded-xl overflow-hidden bg-black/40 border border-gray-200">
             <video
               ref={videoRef}
               autoPlay
@@ -482,7 +482,7 @@ export default function DecisionEngineViewer() {
             />
             {!isActive && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-                <p className="text-white/30 text-sm">Camera inactive</p>
+                <p className="text-gray-600 font-semibold text-sm">Camera inactive</p>
               </div>
             )}
           </div>
@@ -490,12 +490,12 @@ export default function DecisionEngineViewer() {
 
         {/* Risk Score Gauge */}
         <div className={cardClass + ' flex flex-col items-center justify-center'}>
-          <h3 className="text-white/80 text-sm font-semibold flex items-center gap-2 mb-4">
+          <h3 className="text-gray-600 font-semibold text-sm font-semibold flex items-center gap-2 mb-4">
             <Shield size={14} style={{ color: tierColor }} /> Risk Score
           </h3>
           <RiskGauge score={riskScore} tierLabel={tierLabel} tierColor={tierColor} />
           <div className="mt-4 text-center">
-            <p className="text-white/40 text-xs">
+            <p className="text-gray-600 font-semibold text-xs">
               {evalCount} evaluations · {Math.round(sessionDur)}s session
             </p>
           </div>
@@ -503,7 +503,7 @@ export default function DecisionEngineViewer() {
 
         {/* Session Status Card */}
         <div className={cardClass + ' flex flex-col'}>
-          <h3 className="text-white/80 text-sm font-semibold flex items-center gap-2 mb-4">
+          <h3 className="text-gray-600 font-semibold text-sm font-semibold flex items-center gap-2 mb-4">
             <Zap size={14} className="text-yellow-400" /> Decision
           </h3>
 
@@ -516,19 +516,19 @@ export default function DecisionEngineViewer() {
               <StatusIcon size={20} style={{ color: statusStyle.color }} />
             </div>
             <div>
-              <p className="text-white font-semibold text-lg">{statusStyle.label}</p>
-              <p className="text-white/40 text-xs">Action: {action.replace(/_/g, ' ')}</p>
+              <p className="text-black font-bold font-semibold text-lg">{statusStyle.label}</p>
+              <p className="text-gray-600 font-semibold text-xs">Action: {action.replace(/_/g, ' ')}</p>
             </div>
           </div>
 
           {/* Reasoning */}
-          <div className="flex-1 rounded-xl bg-white/[0.03] border border-white/5 p-3 mb-4">
-            <p className="text-white/60 text-xs leading-relaxed">{reasoning}</p>
+          <div className="flex-1 rounded-xl bg-gray-100 border border-gray-200 p-3 mb-4">
+            <p className="text-gray-600 font-semibold text-xs leading-relaxed">{reasoning}</p>
           </div>
 
           {/* AI Confidence */}
           <div className="flex items-center justify-between">
-            <span className="text-white/40 text-xs">Overall AI Confidence</span>
+            <span className="text-gray-600 font-semibold text-xs">Overall AI Confidence</span>
             <span
               className="text-sm font-mono font-bold"
               style={{ color: aiConfidence >= 0.8 ? '#22c55e' : aiConfidence >= 0.6 ? '#eab308' : '#f97316' }}
@@ -544,14 +544,14 @@ export default function DecisionEngineViewer() {
 
         {/* Risk Trend Chart */}
         <div className={cardClass}>
-          <h3 className="text-white/80 text-sm font-semibold flex items-center gap-2 mb-3">
+          <h3 className="text-gray-600 font-semibold text-sm font-semibold flex items-center gap-2 mb-3">
             <TrendingUp size={14} className="text-cyan-400" /> Risk Trend
           </h3>
           <div className="h-28 w-full">
             {scoreHistory.length > 1 ? (
               <TrendChart history={scoreHistory} />
             ) : (
-              <div className="h-full flex items-center justify-center text-white/20 text-sm">
+              <div className="h-full flex items-center justify-center text-gray-600 font-semibold text-sm">
                 Waiting for data...
               </div>
             )}
@@ -560,7 +560,7 @@ export default function DecisionEngineViewer() {
 
         {/* Per-Module Confidence Grid */}
         <div className={cardClass}>
-          <h3 className="text-white/80 text-sm font-semibold flex items-center gap-2 mb-4">
+          <h3 className="text-gray-600 font-semibold text-sm font-semibold flex items-center gap-2 mb-4">
             <Activity size={14} className="text-purple-400" /> Module Confidence
           </h3>
           <div className="space-y-3">
@@ -578,7 +578,7 @@ export default function DecisionEngineViewer() {
 
       {/* ═══ Bottom: Violations Table ═══ */}
       <div className={cardClass}>
-        <h3 className="text-white/80 text-sm font-semibold flex items-center gap-2 mb-4">
+        <h3 className="text-gray-600 font-semibold text-sm font-semibold flex items-center gap-2 mb-4">
           <AlertTriangle size={14} className="text-amber-400" /> Active Violations
           {violations.length > 0 && (
             <span className="ml-auto text-xs font-mono px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20">
@@ -588,7 +588,7 @@ export default function DecisionEngineViewer() {
         </h3>
 
         {violations.length === 0 ? (
-          <div className="text-center py-8 text-white/20">
+          <div className="text-center py-8 text-gray-600 font-semibold">
             <CheckCircle size={32} className="mx-auto mb-2 text-emerald-400/30" />
             <p className="text-sm">No violations detected</p>
           </div>
@@ -596,7 +596,7 @@ export default function DecisionEngineViewer() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-white/40 text-xs border-b border-white/5">
+                <tr className="text-gray-600 font-semibold text-xs border-b border-gray-200">
                   <th className="text-left py-2 pr-4 font-medium">Violation</th>
                   <th className="text-left py-2 pr-4 font-medium">Severity</th>
                   <th className="text-left py-2 pr-4 font-medium">Weight</th>
@@ -614,9 +614,9 @@ export default function DecisionEngineViewer() {
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0 }}
                         transition={{ duration: 0.2, delay: i * 0.03 }}
-                        className="border-b border-white/[0.03]"
+                        className="border-b border-gray-200"
                       >
-                        <td className="py-2.5 pr-4 text-white/80 font-medium">{v.label}</td>
+                        <td className="py-2.5 pr-4 text-gray-600 font-semibold font-medium">{v.label}</td>
                         <td className="py-2.5 pr-4">
                           <span
                             className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
@@ -625,8 +625,8 @@ export default function DecisionEngineViewer() {
                             {v.severity}
                           </span>
                         </td>
-                        <td className="py-2.5 pr-4 font-mono text-white/50">{v.weight}</td>
-                        <td className="py-2.5 text-white/50 text-xs max-w-xs truncate">{v.reason}</td>
+                        <td className="py-2.5 pr-4 font-mono text-gray-600 font-semibold">{v.weight}</td>
+                        <td className="py-2.5 text-gray-600 font-semibold text-xs max-w-xs truncate">{v.reason}</td>
                       </motion.tr>
                     );
                   })}

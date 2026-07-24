@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TrueView Ground Truth Annotation Schema",
+  "type": "object",
+  "properties": {
+    "sample_id": {
+      "type": "string",
+      "description": "Unique identifier for the video/image sample"
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Relative timestamp in seconds if video, 0 if image"
+    },
+    "ground_truth": {
+      "type": "object",
+      "properties": {
+        "person_count": { "type": "integer" },
+        "identity": { "type": "string", "enum": ["correct", "incorrect", "unknown"] },
+        "liveness": { "type": "string", "enum": ["live", "spoof_photo", "spoof_video"] },
+        "gaze": { "type": "string", "enum": ["center", "left", "right", "up", "down"] },
+        "head_pose": { "type": "string", "enum": ["forward", "left", "right", "up", "down", "tilt"] },
+        "phone_present": { "type": "boolean" },
+        "speaking": { "type": "boolean" },
+        "attention": { "type": "string", "enum": ["focused", "distracted", "absent"] }
+      },
+      "required": ["person_count", "phone_present"]
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "lighting": { "type": "string" },
+        "camera_quality": { "type": "string" }
+      }
+    }
+  },
+  "required": ["sample_id", "timestamp", "ground_truth"]
+}

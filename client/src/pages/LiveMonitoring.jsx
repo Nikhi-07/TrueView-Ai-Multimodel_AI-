@@ -1,27 +1,32 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Play, Square, Volume2, Clock, Eye, ScanFace, Fingerprint, Mic, Boxes, Activity
+  Mic, MicOff, Video, VideoOff, MonitorUp, PhoneOff, Users, MessageSquare, Info, ShieldAlert, AlertTriangle, X
 } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import CameraFeed from '../components/Camera/CameraFeed';
-import MetricGauge from '../components/Charts/MetricGauge';
-import PageHeader from '../components/Cards/PageHeader';
 
 const CONTEXT_OPTIONS = [
-  { id: 'EXAM', label: 'Examination Mode (Strict)' },
-  { id: 'INTERVIEW', label: 'Interview Mode (Conversational)' },
-  { id: 'ONLINE_CLASS', label: 'Online Class (Lecture)' },
-  { id: 'MEETING', label: 'Meeting Mode (Collaborative)' },
-  { id: 'WORKPLACE', label: 'Workplace Mode (Productivity)' }
+  { id: 'EXAM', label: 'Examination (Strict)' },
+  { id: 'INTERVIEW', label: 'Interview (Conversational)' },
+  { id: 'ONLINE_CLASS', label: 'Online Class' },
+  { id: 'MEETING', label: 'Meeting' },
+  { id: 'WORKPLACE', label: 'Workplace' }
 ];
 
 export default function LiveMonitoring() {
   const [isMonitoringActive, setIsMonitoringActive] = useState(false);
   const [sessionType, setSessionType] = useState('EXAM');
-  const [voiceAlertsEnabled, setVoiceAlertsEnabled] = useState(true);
   const [elapsedTime, setElapsedTime] = useState(0);
-  const [alerts, setAlerts] = useState([]);
+  const [terminationReason, setTerminationReason] = useState(null);
+  const [engineResult, setEngineResult] = useState(null);
   
+  // UI Controls (Visual only for now, can be hooked to actual WebRTC later)
+  const [isMicOn, setIsMicOn] = useState(true);
+  const [isCamOn, setIsCamOn] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  
+  const [alerts, setAlerts] = useState([]);
+
   const cameraFeedRef = useRef(null);
   const sessionIdRef = useRef(`session_${Date.now()}`);
   const timerRef = useRef(null);
@@ -31,22 +36,8 @@ export default function LiveMonitoring() {
   const audioSamplesRef = useRef([]);
   const lastSpokenRef = useRef({ time: 0, text: '' });
 
-  const [engineResult, setEngineResult] = useState({
-    session: { id: sessionIdRef.current, mode: 'EXAM' },
-    identity: { verified: true, confidence: 0.98, user_id: 'candidate_01', status: 'Verified' },
-    liveness: { status: 'live', confidence: 0.96 },
-    attention: { status: 'FOCUSED', score: 92.0, gaze: 'center', head_pose: 'Looking Straight' },
-    audio: { speaking: false, noise_level: 'low', voice_confidence: 0.95 },
-    environment: { person_count: 1, phone_detected: false, objects: [] },
-    behaviour: { current_state: 'normal', events: [] },
-    risk: { score: 0.0, current: 0.0, peak: 0.0, level: 'NORMAL' },
-    decision: { action: 'CONTINUE_MONITORING', reasons: [] },
-    performance: { fps: 0, latency_ms: 0 },
-    module_health: {},
-  });
-
   const speakAlert = useCallback((text) => {
-    if (!voiceAlertsEnabled || !('speechSynthesis' in window)) return;
+    if (!('speechSynthesis' in window)) return;
     const now = Date.now();
     if (lastSpokenRef.current.text === text && (now - lastSpokenRef.current.time) < 4000) return;
     if ((now - lastSpokenRef.current.time) < 2500) return;
@@ -60,7 +51,7 @@ export default function LiveMonitoring() {
       window.speechSynthesis.speak(utterance);
       lastSpokenRef.current = { time: now, text };
     } catch (_) {}
-  }, [voiceAlertsEnabled]);
+  }, []);
 
   // Session Timer
   useEffect(() => {
@@ -77,10 +68,10 @@ export default function LiveMonitoring() {
     const h = Math.floor(s / 3600).toString().padStart(2, '0');
     const m = Math.floor((s % 3600) / 60).toString().padStart(2, '0');
     const sec = (s % 60).toString().padStart(2, '0');
+    if (s < 3600) return `${m}:${sec}`;
     return `${h}:${m}:${sec}`;
   };
 
-  // Audio capture
   const startAudioCapture = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -106,279 +97,331 @@ export default function LiveMonitoring() {
     audioSamplesRef.current = [];
   };
 
-  // Start / Stop Unified Monitoring
-  const toggleMonitoring = async () => {
-    if (isMonitoringActive) {
-      stopAudioCapture();
-      if (unifiedLoopRef.current) clearInterval(unifiedLoopRef.current);
-      await fetch(`/ai-api/ai/session/${sessionIdRef.current}/stop`, { method: 'POST' }).catch(() => {});
-      setIsMonitoringActive(false);
-    } else {
-      sessionIdRef.current = `session_${Date.now()}`;
-      await fetch('/ai-api/ai/session/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: sessionIdRef.current,
-          user_id: 'candidate_01',
-          session_type: sessionType
-        })
-      }).catch(() => {});
-
-      startAudioCapture();
-      setIsMonitoringActive(true);
-
-      unifiedLoopRef.current = setInterval(async () => {
-        try {
-          const frame = cameraFeedRef.current?.captureFrameBase64();
-          const samples = audioSamplesRef.current;
-
-          const res = await fetch(`/ai-api/ai/session/${sessionIdRef.current}/process`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              session_id: sessionIdRef.current,
-              user_id: 'candidate_01',
-              session_type: sessionType,
-              video_frame: frame || null,
-              audio_samples: samples.length ? samples : null,
-              timestamp: Date.now() / 1000.0,
-            })
-          });
-
-          const data = await res.json();
-          if (res.ok && data) {
-            setEngineResult(data);
-
-            // Log to Express Server backend
-            fetch('/api/ai-engine/log', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('trueview_token')}`
-              },
-              body: JSON.stringify(data)
-            }).catch(() => {});
-
-            // Process alerts
-            if (data.behaviour?.events?.length) {
-              data.behaviour.events.forEach(evt => {
-                addAlert(`[${evt.type}] ${evt.evidence}`, evt.severity === 'CRITICAL' ? 'danger' : 'warning');
-                
-                if (evt.type === 'PHONE_DETECTED') {
-                  speakAlert("Warning! Mobile phone detected in camera view.");
-                } else if (evt.type === 'MULTIPLE_PERSONS' && sessionType === 'EXAM') {
-                  speakAlert("Warning! Multiple persons detected in the room.");
-                } else if (evt.type === 'PROLONGED_DISTRACTION' && sessionType === 'EXAM') {
-                  speakAlert("Warning! Please focus directly on your screen.");
-                }
-              });
-            }
-          }
-        } catch (_) {}
-      }, 250);
-    }
+  const stopMonitoringDueToKickout = async () => {
+    stopAudioCapture();
+    if (unifiedLoopRef.current) clearInterval(unifiedLoopRef.current);
+    await fetch(`/ai-api/ai/session/${sessionIdRef.current}/stop`, { method: 'POST' }).catch(() => {});
+    setIsMonitoringActive(false);
   };
 
   const addAlert = (msg, type) => {
     setAlerts(prev => {
       if (prev.length > 0 && prev[0].msg === msg && (Date.now() - prev[0].time) < 3000) return prev;
-      return [{ id: `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`, msg, type, time: Date.now() }, ...prev].slice(0, 15);
+      return [{ id: `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`, msg, type, time: Date.now() }, ...prev].slice(0, 50);
     });
   };
 
-  const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.05 } } };
-  const item = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } };
+  const startMeeting = async () => {
+    sessionIdRef.current = `session_${Date.now()}`;
+    setAlerts([]);
+
+    await fetch('/ai-api/ai/session/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionIdRef.current,
+        user_id: 'candidate_01',
+        session_type: sessionType
+      })
+    }).catch(() => {});
+
+    startAudioCapture();
+    setIsMonitoringActive(true);
+
+    unifiedLoopRef.current = setInterval(async () => {
+      try {
+        const frame = cameraFeedRef.current?.captureFrameBase64();
+        const samples = audioSamplesRef.current;
+
+        const res = await fetch(`/ai-api/ai/session/${sessionIdRef.current}/process`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionIdRef.current,
+            user_id: 'candidate_01',
+            session_type: sessionType,
+            video_frame: frame || null,
+            audio_samples: samples.length ? samples : null,
+            timestamp: Date.now() / 1000.0,
+          })
+        });
+
+        const data = await res.json();
+        if (res.ok && data) {
+          setEngineResult(data);
+          // Log to Express Server backend
+          fetch('/api/ai-engine/log', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${localStorage.getItem('trueview_token')}`
+            },
+            body: JSON.stringify(data)
+          }).catch(() => {});
+
+          let shouldKickout = false;
+          let kickoutReason = '';
+
+          if (data.decision?.action === 'SUSPEND_SESSION' || data.risk?.current > 85) {
+             shouldKickout = true;
+             kickoutReason = data.decision?.reasons?.[0] || 'High risk score reached. Session suspended.';
+          }
+
+          if (data.behaviour?.events?.length) {
+            data.behaviour.events.forEach(evt => {
+              addAlert(`[${evt.type.replace(/_/g, ' ')}] ${evt.evidence}`, evt.severity === 'CRITICAL' ? 'danger' : 'warning');
+              
+              if (evt.type === 'PHONE_DETECTED') {
+                speakAlert("Warning! Mobile phone detected in camera view.");
+              } else if (evt.type === 'MULTIPLE_PERSONS' && sessionType === 'EXAM') {
+                speakAlert("Warning! Multiple persons detected in the room.");
+              } else if (evt.type === 'PROLONGED_DISTRACTION' && sessionType === 'EXAM') {
+                speakAlert("Warning! Please focus directly on your screen.");
+              } else if (evt.type === 'USER_ABSENT') {
+                speakAlert("Warning! Please stay in the camera view.");
+              } else if (evt.severity === 'CRITICAL') {
+                speakAlert(`Warning! ${evt.type.replace(/_/g, ' ')}`);
+              }
+            });
+          }
+
+          if (shouldKickout) {
+            if ('speechSynthesis' in window) {
+              window.speechSynthesis.cancel();
+              const utterance = new SpeechSynthesisUtterance("Session terminated due to high risk score and rule violations.");
+              utterance.volume = 1.0;
+              window.speechSynthesis.speak(utterance);
+            }
+            setTerminationReason(kickoutReason);
+            stopMonitoringDueToKickout();
+          }
+        }
+      } catch (_) {}
+    }, 250);
+  };
+
+  // Start meeting automatically when entering the room
+  useEffect(() => {
+    if (!isMonitoringActive && !terminationReason) {
+      startMeeting();
+    }
+    return () => {
+      stopMonitoringDueToKickout();
+    };
+  }, []);
 
   return (
-    <motion.div variants={container} initial="hidden" animate="show" className="h-full flex flex-col space-y-4">
-      <PageHeader
-        title="Live Proctoring Control Engine"
-        subtitle={`Session ID: ${sessionIdRef.current.slice(-8)} • Candidate: Student #01`}
-        breadcrumb={['TrueView AI', 'Live Monitoring']}
-        actions={
-          <div className="flex items-center gap-3">
-            <select
-              value={sessionType}
-              onChange={e => setSessionType(e.target.value)}
-              disabled={isMonitoringActive}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-800 bg-white border border-slate-300 focus:outline-none"
-            >
-              {CONTEXT_OPTIONS.map(opt => (
-                <option key={opt.id} value={opt.id}>{opt.label}</option>
-              ))}
-            </select>
-            <button
-              onClick={() => setVoiceAlertsEnabled(prev => !prev)}
-              className={`text-xs py-1.5 px-3 rounded-lg flex items-center gap-1.5 border font-medium transition-all ${
-                voiceAlertsEnabled 
-                  ? 'bg-slate-900 text-white border-slate-900' 
-                  : 'bg-white text-slate-600 border-slate-300'
-              }`}
-            >
-              <Volume2 size={14} />
-              {voiceAlertsEnabled ? 'Voice Alerts Active' : 'Voice Alerts Muted'}
-            </button>
-            <div className="bg-white border border-slate-200 px-3 py-1.5 rounded-lg flex items-center gap-2">
-              <Clock size={14} className="text-slate-500" />
-              <span className="text-xs font-mono font-semibold text-slate-900">{formatTime(elapsedTime)}</span>
+    <div className="fixed inset-0 z-50 bg-[#202124] text-white flex flex-col font-sans overflow-hidden">
+      
+      {/* Termination Modal Overlay */}
+      {terminationReason && (
+        <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-6">
+          <div className="bg-[#2b2d31] border border-[#3f4147] rounded-2xl shadow-2xl max-w-md w-full p-8 text-center space-y-6">
+            <div className="w-20 h-20 bg-rose-500/10 text-rose-500 rounded-full flex items-center justify-center mx-auto border border-rose-500/20">
+              <PhoneOff size={40} />
             </div>
-            <button onClick={toggleMonitoring}
-              className={`text-xs font-bold py-2 px-4 rounded-lg flex items-center gap-2 transition-all ${isMonitoringActive ? 'bg-rose-600 hover:bg-rose-700 text-white' : 'bg-slate-900 hover:bg-slate-800 text-white'}`}>
-              {isMonitoringActive ? <Square size={14}/> : <Play size={14}/>}
-              {isMonitoringActive ? 'Stop Monitoring' : 'Start Monitoring'}
+            <div>
+              <h2 className="text-2xl font-normal text-white mb-3">You have been removed from the session</h2>
+              <p className="text-gray-400 font-normal leading-relaxed">{terminationReason}</p>
+            </div>
+            <button 
+              onClick={() => window.location.href = '/'}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-8 rounded-lg transition-colors"
+            >
+              Return to Home
             </button>
           </div>
-        }
-      />
+        </div>
+      )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 min-h-0">
-        {/* Left Panel: Module Status */}
-        <motion.div variants={item} className="lg:col-span-3 space-y-4">
-          <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4 shadow-sm">
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Module Status</h3>
-
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                <div className="flex items-center gap-2">
-                  <ScanFace size={15} className="text-slate-700" />
-                  <span className="text-xs font-medium text-slate-800">Identity</span>
-                </div>
-                <span className={engineResult.identity.verified ? 'badge-success' : 'badge-danger'}>
-                  {engineResult.identity.verified ? 'Verified' : 'Unverified'}
-                </span>
+      {/* Main Content Area */}
+      <div className="flex-1 relative flex overflow-hidden min-h-0">
+        
+        {/* Main Video Area */}
+        <div className={`flex-1 p-4 flex items-center justify-center transition-all duration-300 ${isSidebarOpen ? 'mr-80' : ''}`}>
+          <div className="w-full h-full max-w-6xl relative bg-[#3c4043] rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center group border border-[#5f6368]/30">
+            
+            {isCamOn ? (
+              <CameraFeed ref={cameraFeedRef} isMonitoringActive={isMonitoringActive} />
+            ) : (
+              <div className="w-32 h-32 rounded-full bg-blue-600 flex items-center justify-center text-4xl font-normal text-white shadow-lg">
+                C
               </div>
-
-              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                <div className="flex items-center gap-2">
-                  <Fingerprint size={15} className="text-slate-700" />
-                  <span className="text-xs font-medium text-slate-800">Liveness</span>
-                </div>
-                <span className={engineResult.liveness.status === 'live' ? 'badge-success' : 'badge-warning'}>
-                  {engineResult.liveness.status.toUpperCase()}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                <div className="flex items-center gap-2">
-                  <Eye size={15} className="text-slate-700" />
-                  <span className="text-xs font-medium text-slate-800">Attention</span>
-                </div>
-                <span className={(engineResult.attention.status === 'FOCUSED' || engineResult.attention.status === 'LOOKING_AT_KEYBOARD') ? 'badge-success' : 'badge-warning'}>
-                  {engineResult.attention.status}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                <div className="flex items-center gap-2">
-                  <Mic size={15} className="text-slate-700" />
-                  <span className="text-xs font-medium text-slate-800">Voice VAD</span>
-                </div>
-                <span className={engineResult.audio.speaking ? 'badge-warning' : 'badge-neutral'}>
-                  {engineResult.audio.speaking ? 'SPEAKING' : 'QUIET'}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                <div className="flex items-center gap-2">
-                  <Boxes size={15} className="text-slate-700" />
-                  <span className="text-xs font-medium text-slate-800">YOLO Object</span>
-                </div>
-                <span className={engineResult.environment.person_count > 1 ? 'badge-danger' : 'badge-neutral'}>
-                  {engineResult.environment.person_count} Person(s)
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2 shadow-sm">
-            <div className="flex items-center justify-between text-xs text-slate-500">
-              <span>Latency</span>
-              <span className="font-mono font-semibold text-slate-800">{engineResult.performance.latency_ms} ms</span>
-            </div>
-            <div className="flex items-center justify-between text-xs text-slate-500">
-              <span>Frame Rate</span>
-              <span className="font-mono font-semibold text-slate-800">{engineResult.performance.fps} FPS</span>
-            </div>
-            <div className="flex items-center justify-between text-xs text-slate-500">
-              <span>Status</span>
-              <span className="font-semibold text-emerald-700 uppercase">{engineResult.status}</span>
-            </div>
-          </div>
-        </motion.div>
-
-        {/* Center Panel: Video Feed */}
-        <motion.div variants={item} className="lg:col-span-6 flex flex-col space-y-4">
-          <div className="relative flex-1 bg-slate-900 rounded-xl overflow-hidden min-h-[360px] flex items-center justify-center border border-slate-300 shadow-sm">
-            <CameraFeed ref={cameraFeedRef} isMonitoringActive={isMonitoringActive} />
-
-            {isMonitoringActive && (
-              <>
-                <div className="absolute top-4 left-4 right-4 flex items-center justify-between pointer-events-none">
-                  <div className="flex items-center gap-2 bg-slate-900/80 border border-slate-700 text-white text-xs px-3 py-1.5 rounded-md font-semibold">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>LIVE STREAM</span>
-                  </div>
-                  <div className="bg-slate-900/80 border border-slate-700 text-slate-200 text-xs px-2.5 py-1 rounded-md font-mono">{sessionType}</div>
-                </div>
-
-                <div className="absolute bottom-4 left-4 right-4 bg-slate-900/90 border border-slate-700 p-3 rounded-xl backdrop-blur-md flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="badge-neutral uppercase font-bold text-xs">{engineResult.risk.level}</span>
-                    <span className="text-xs text-slate-300">Gaze: <b>{engineResult.attention.gaze}</b></span>
-                    <span className="text-xs text-slate-300">Head: <b>{engineResult.attention.head_pose}</b></span>
-                  </div>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {engineResult.environment.phone_detected && (
-                      <span className="badge-danger font-bold">
-                        Phone Detected
-                      </span>
-                    )}
-                    {engineResult.environment.objects?.map((obj, i) => (
-                      obj.label !== 'person' && (
-                        <span key={i} className="badge-warning font-semibold">
-                          {obj.label.toUpperCase()} ({Math.round((obj.confidence || 0.8) * 100)}%)
-                        </span>
-                      )
-                    ))}
-                  </div>
-                </div>
-              </>
             )}
-          </div>
-        </motion.div>
 
-        {/* Right Panel: Risk & Events */}
-        <motion.div variants={item} className="lg:col-span-3 space-y-4">
-          <div className="bg-white border border-slate-200 rounded-xl p-5 text-center shadow-sm">
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Dynamic Risk Score</h3>
-            <div className="flex items-center justify-center mb-3">
-              <MetricGauge value={Math.round(engineResult?.risk?.score ?? engineResult?.risk?.current ?? 0)} max={100} size={110} strokeWidth={8} label={engineResult?.risk?.level ?? 'NORMAL'} />
+            {/* Video Overlays */}
+            <div className="absolute top-4 left-4 bg-black/50 backdrop-blur-sm px-3 py-1.5 rounded-lg flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+              <span className="text-xs font-medium text-white tracking-wide">Proctoring Active</span>
             </div>
-            <div className="text-xs text-slate-500">Context: <b className="text-slate-800">{sessionType}</b></div>
-          </div>
 
-          <div className="bg-white border border-slate-200 rounded-xl flex flex-col overflow-hidden h-[260px] shadow-sm">
-            <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-slate-700">Unified Event Log</h3>
-              <span className="text-[10px] font-mono text-slate-500">{alerts.length} logged</span>
-            </div>
-            <div className="p-4 space-y-2.5 overflow-y-auto flex-1">
-              {alerts.length === 0 ? (
-                <div className="text-xs text-slate-400 text-center mt-10">No suspicious events recorded.</div>
-              ) : (
-                alerts.map(alert => (
-                  <div key={alert.id} className="p-2 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-0.5">
-                    <span className={`font-semibold ${alert.type === 'danger' ? 'text-rose-700' : 'text-amber-700'}`}>
-                      {alert.msg}
-                    </span>
+            {engineResult && (
+              <div className="absolute top-4 right-4 flex flex-col items-end gap-2">
+                <div className="bg-black/50 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2 text-xs text-white">
+                  Risk: <span className={`font-bold ${engineResult.risk?.score > 50 ? 'text-rose-400' : 'text-emerald-400'}`}>{engineResult.risk?.score?.toFixed(0) || 0}%</span>
+                </div>
+                {engineResult.environment?.phone_detected && (
+                  <div className="bg-rose-500/90 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-rose-400/50 flex items-center gap-2 text-[10px] font-bold text-white shadow-lg">
+                    <PhoneOff size={12} /> Phone Detected
                   </div>
-                ))
+                )}
+              </div>
+            )}
+
+            <div className="absolute bottom-4 left-4 right-4 flex items-end justify-between">
+              <div className="bg-black/50 backdrop-blur-sm px-3 py-1.5 rounded-lg flex items-center gap-2">
+                {!isMicOn && <MicOff size={16} className="text-red-500" />}
+                <span className="text-sm font-medium text-white">Candidate (You)</span>
+              </div>
+
+              {engineResult && (
+                <div className="bg-black/60 backdrop-blur-md px-3 py-2 rounded-lg border border-white/10 flex items-center gap-3 text-[11px] text-gray-200">
+                  <span>Gaze: <b className="text-white">{engineResult.attention?.gaze || 'N/A'}</b></span>
+                  <span>Pose: <b className="text-white">{engineResult.attention?.head_pose || 'N/A'}</b></span>
+                </div>
               )}
             </div>
           </div>
-        </motion.div>
+        </div>
+
+        {/* Collapsible Sidebar for AI Alerts */}
+        <AnimatePresence>
+          {isSidebarOpen && (
+            <motion.div
+              initial={{ x: 320 }}
+              animate={{ x: 0 }}
+              exit={{ x: 320 }}
+              transition={{ type: "spring", bounce: 0, duration: 0.3 }}
+              className="absolute right-0 top-0 bottom-0 w-80 bg-[#2b2d31] border-l border-[#3f4147] flex flex-col shadow-2xl z-40"
+            >
+              <div className="p-4 border-b border-[#3f4147] flex items-center justify-between shrink-0">
+                <h3 className="text-sm font-medium text-white flex items-center gap-2">
+                  <ShieldAlert size={16} className="text-blue-400" />
+                  Proctoring Alerts
+                </h3>
+                <button 
+                  onClick={() => setIsSidebarOpen(false)}
+                  className="p-1 hover:bg-[#3f4147] rounded-md text-gray-400 hover:text-white transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                {alerts.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-gray-500 space-y-3">
+                    <ShieldAlert size={32} className="opacity-50" />
+                    <p className="text-sm">No alerts detected</p>
+                  </div>
+                ) : (
+                  alerts.map(alert => (
+                    <motion.div 
+                      key={alert.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className={`p-3 rounded-lg border text-sm shadow-sm ${
+                        alert.type === 'danger' 
+                          ? 'bg-rose-500/10 border-rose-500/30 text-rose-200' 
+                          : 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                        <span className="font-medium">{alert.msg}</span>
+                      </div>
+                      <div className="text-[10px] text-gray-400 mt-2 flex justify-end">
+                        {new Date(alert.time).toLocaleTimeString()}
+                      </div>
+                    </motion.div>
+                  ))
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
-    </motion.div>
+
+      {/* Bottom Control Bar */}
+      <div className="h-20 bg-[#202124] px-6 flex items-center justify-between shrink-0 z-50">
+        
+        {/* Left: Time and Info */}
+        <div className="flex items-center gap-4 w-64">
+          <span className="text-base font-normal text-white">{formatTime(elapsedTime)}</span>
+          <div className="w-px h-5 bg-[#5f6368]"></div>
+          <select
+            value={sessionType}
+            onChange={e => setSessionType(e.target.value)}
+            disabled={isMonitoringActive}
+            className="bg-transparent text-gray-300 text-sm font-medium focus:outline-none border-b border-transparent hover:border-gray-500 cursor-pointer disabled:opacity-50"
+          >
+            {CONTEXT_OPTIONS.map(opt => (
+              <option key={opt.id} value={opt.id} className="bg-[#202124] text-white">
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Center: Primary Controls */}
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={() => setIsMicOn(!isMicOn)}
+            className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors ${
+              isMicOn ? 'bg-[#3c4043] hover:bg-[#4a4d51] text-white' : 'bg-[#ea4335] hover:bg-[#d93025] text-white'
+            }`}
+          >
+            {isMicOn ? <Mic size={20} /> : <MicOff size={20} />}
+          </button>
+
+          <button 
+            onClick={() => setIsCamOn(!isCamOn)}
+            className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors ${
+              isCamOn ? 'bg-[#3c4043] hover:bg-[#4a4d51] text-white' : 'bg-[#ea4335] hover:bg-[#d93025] text-white'
+            }`}
+          >
+            {isCamOn ? <Video size={20} /> : <VideoOff size={20} />}
+          </button>
+
+          <button className="w-12 h-12 rounded-full bg-[#3c4043] hover:bg-[#4a4d51] text-white flex items-center justify-center transition-colors">
+            <MonitorUp size={20} />
+          </button>
+
+          <button 
+            onClick={() => {
+              if (window.confirm("Are you sure you want to leave the examination? This may flag your session.")) {
+                stopMonitoringDueToKickout();
+                window.location.href = '/';
+              }
+            }}
+            className="w-14 h-10 rounded-full bg-[#ea4335] hover:bg-[#d93025] text-white flex items-center justify-center transition-colors shadow-lg px-6"
+          >
+            <PhoneOff size={20} />
+          </button>
+        </div>
+
+        {/* Right: Secondary Controls */}
+        <div className="flex items-center justify-end gap-3 w-64 text-[#9aa0a6]">
+          <button className="p-2 hover:bg-[#3c4043] rounded-full transition-colors">
+            <Info size={20} />
+          </button>
+          <button className="p-2 hover:bg-[#3c4043] rounded-full transition-colors">
+            <Users size={20} />
+          </button>
+          <button className="p-2 hover:bg-[#3c4043] rounded-full transition-colors">
+            <MessageSquare size={20} />
+          </button>
+          <button 
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            className={`p-2 rounded-full transition-colors relative ${isSidebarOpen ? 'bg-blue-600/20 text-blue-400' : 'hover:bg-[#3c4043]'}`}
+          >
+            <ShieldAlert size={20} />
+            {alerts.length > 0 && (
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-blue-500 rounded-full border border-[#202124]"></span>
+            )}
+          </button>
+        </div>
+      </div>
+      
+    </div>
   );
 }

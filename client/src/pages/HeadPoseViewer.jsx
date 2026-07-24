@@ -236,7 +236,7 @@ export default function HeadPoseViewer() {
             {isActive && (
               <button
                 onClick={handleResetMetrics}
-                className="py-2 px-4 rounded-xl text-xs font-semibold bg-surface-800 hover:bg-surface-700 text-gray-200 border border-white/[0.06] transition-all"
+                className="py-2 px-4 rounded-xl text-xs font-semibold bg-gray-50 hover:bg-gray-50 text-black font-bold border border-gray-200 transition-all"
               >
                 Reset Metrics
               </button>
@@ -246,7 +246,7 @@ export default function HeadPoseViewer() {
               className={`py-2 px-4 rounded-xl font-medium flex items-center gap-2 transition-all ${
                 isActive
                   ? 'bg-danger-500/25 hover:bg-danger-500/35 text-danger-400 border border-danger-500/30'
-                  : 'bg-primary-500 hover:bg-primary-600 text-white'
+                  : 'bg-primary-500 hover:bg-primary-600 text-black font-bold'
               }`}
             >
               {isActive ? <Square size={16} /> : <Play size={16} />}
@@ -259,7 +259,7 @@ export default function HeadPoseViewer() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 min-h-0">
         {/* ══════════ Left Side: Stream Viewer ══════════ */}
         <motion.div variants={item} className="lg:col-span-8 flex flex-col h-[500px] lg:h-auto">
-          <div className="glass flex-1 relative rounded-2xl overflow-hidden border-white/[0.1] h-full bg-black flex items-center justify-center">
+          <div className="bg-white border border-gray-200 shadow-sm flex-1 relative rounded-2xl overflow-hidden border-gray-200 h-full bg-black flex items-center justify-center">
             {/* Hidden raw video feed */}
             <video
               ref={videoRef}
@@ -288,10 +288,10 @@ export default function HeadPoseViewer() {
                 )}
               </div>
             ) : (
-              <div className="text-center text-surface-600 p-8 flex flex-col items-center">
-                <Compass size={64} className="mb-4 text-surface-700 animate-spin-slow" />
-                <h3 className="text-lg font-medium text-gray-400">Pose Stream Inactive</h3>
-                <p className="text-xs text-gray-500 max-w-xs mt-1">
+              <div className="text-center text-gray-600 font-semibold p-8 flex flex-col items-center">
+                <Compass size={64} className="mb-4 text-gray-600 font-semibold animate-spin-slow" />
+                <h3 className="text-lg font-medium text-gray-600 font-semibold">Pose Stream Inactive</h3>
+                <p className="text-xs text-gray-600 font-semibold max-w-xs mt-1">
                   Start the camera stream to visualize the head orientation tracking system.
                 </p>
               </div>
@@ -310,10 +310,10 @@ export default function HeadPoseViewer() {
         <motion.div variants={item} className="lg:col-span-4 space-y-4 overflow-y-auto pr-1">
           
           {/* Gyro Angle Dials */}
-          <div className="glass p-5 rounded-2xl space-y-4">
+          <div className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl space-y-4">
             <div className="flex items-center gap-2">
               <Scan size={16} className="text-primary-400" />
-              <h3 className="text-sm font-bold text-gray-200">Gyro Rotation Dials</h3>
+              <h3 className="text-sm font-bold text-black font-bold">Gyro Rotation Dials</h3>
             </div>
             <div className="grid grid-cols-3 gap-2">
               <AngleDial
@@ -332,14 +332,14 @@ export default function HeadPoseViewer() {
           </div>
 
           {/* Attention and Facing Stats */}
-          <div className="glass p-5 rounded-2xl space-y-4">
+          <div className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <MonitorPlay size={16} className="text-primary-400" />
-                <h3 className="text-sm font-bold text-gray-200">Attention Metrics</h3>
+                <h3 className="text-sm font-bold text-black font-bold">Attention Metrics</h3>
               </div>
               {poseData.faceDetected && (
-                <span className="text-[10px] text-gray-500 font-mono">
+                <span className="text-[10px] text-gray-600 font-semibold font-mono">
                   {(poseData.confidence * 100).toFixed(0)}% conf
                 </span>
               )}
@@ -361,17 +361,17 @@ export default function HeadPoseViewer() {
               color={attentionColorMap[poseData.attentionStatus] || 'primary'}
             />
             
-            <div className="text-[10px] text-center text-gray-500 font-mono">
+            <div className="text-[10px] text-center text-gray-600 font-semibold font-mono">
               Continuous Focused Time: {poseData.screenFacingDuration.toFixed(1)}s
             </div>
           </div>
 
           {/* Stability & Tracking Stats */}
-          <div className="glass p-5 rounded-2xl space-y-3">
+          <div className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl space-y-3">
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <Activity size={16} className="text-primary-400" />
-                <h3 className="text-sm font-bold text-gray-200">Stability & Latency</h3>
+                <h3 className="text-sm font-bold text-black font-bold">Stability & Latency</h3>
               </div>
               <StatusBadge
                 label={poseData.faceDetected ? 'STABLE' : 'N/A'}
@@ -381,43 +381,43 @@ export default function HeadPoseViewer() {
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-surface-800/40 border border-white/[0.03] rounded-lg p-2.5 text-center">
-                <div className="text-[9px] text-gray-500 uppercase font-bold tracking-wider">Orientation</div>
-                <div className="text-xs font-bold text-gray-200 mt-1 truncate">
+              <div className="bg-gray-50/40 border border-gray-200 rounded-lg p-2.5 text-center">
+                <div className="text-[9px] text-gray-600 font-semibold uppercase font-bold tracking-wider">Orientation</div>
+                <div className="text-xs font-bold text-black font-bold mt-1 truncate">
                   {poseData.faceDetected ? poseData.headDirection : 'N/A'}
                 </div>
               </div>
               
-              <div className="bg-surface-800/40 border border-white/[0.03] rounded-lg p-2.5 text-center">
-                <div className="text-[9px] text-gray-500 uppercase font-bold tracking-wider">Stability Deviation</div>
-                <div className="text-xs font-bold font-mono text-gray-200 mt-1">
+              <div className="bg-gray-50/40 border border-gray-200 rounded-lg p-2.5 text-center">
+                <div className="text-[9px] text-gray-600 font-semibold uppercase font-bold tracking-wider">Stability Deviation</div>
+                <div className="text-xs font-bold font-mono text-black font-bold mt-1">
                   {poseData.faceDetected ? `${poseData.headStabilityValue.toFixed(1)}°` : '0°'}
                 </div>
               </div>
 
-              <div className="bg-surface-800/40 border border-white/[0.03] rounded-lg p-2.5 text-center">
-                <div className="text-[9px] text-gray-500 uppercase font-bold tracking-wider">Movements / min</div>
-                <div className="text-xs font-bold font-mono text-gray-200 mt-1">
+              <div className="bg-gray-50/40 border border-gray-200 rounded-lg p-2.5 text-center">
+                <div className="text-[9px] text-gray-600 font-semibold uppercase font-bold tracking-wider">Movements / min</div>
+                <div className="text-xs font-bold font-mono text-black font-bold mt-1">
                   {poseData.faceDetected ? poseData.movementFrequency : '0'}
                 </div>
               </div>
 
-              <div className="bg-surface-800/40 border border-white/[0.03] rounded-lg p-2.5 text-center">
-                <div className="text-[9px] text-gray-500 uppercase font-bold tracking-wider">Pipeline FPS</div>
-                <div className="text-xs font-bold font-mono text-gray-200 mt-1">
+              <div className="bg-gray-50/40 border border-gray-200 rounded-lg p-2.5 text-center">
+                <div className="text-[9px] text-gray-600 font-semibold uppercase font-bold tracking-wider">Pipeline FPS</div>
+                <div className="text-xs font-bold font-mono text-black font-bold mt-1">
                   {isActive ? poseData.fps : 0}
                 </div>
               </div>
 
-              <div className="bg-surface-800/40 border border-white/[0.03] rounded-lg p-2.5 text-center">
-                <div className="text-[9px] text-gray-500 uppercase font-bold tracking-wider">Latency</div>
-                <div className="text-xs font-bold font-mono text-gray-200 mt-1">
+              <div className="bg-gray-50/40 border border-gray-200 rounded-lg p-2.5 text-center">
+                <div className="text-[9px] text-gray-600 font-semibold uppercase font-bold tracking-wider">Latency</div>
+                <div className="text-xs font-bold font-mono text-black font-bold mt-1">
                   {poseData.faceDetected ? `${poseData.processingTimeMs}ms` : '0ms'}
                 </div>
               </div>
 
-              <div className="bg-surface-800/40 border border-white/[0.03] rounded-lg p-2.5 flex items-center justify-center">
-                <span className="text-[10px] text-gray-500 flex items-center gap-1.5">
+              <div className="bg-gray-50/40 border border-gray-200 rounded-lg p-2.5 flex items-center justify-center">
+                <span className="text-[10px] text-gray-600 font-semibold flex items-center gap-1.5">
                   <ShieldAlert size={12} /> Proctor OK
                 </span>
               </div>

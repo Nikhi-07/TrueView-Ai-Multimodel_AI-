@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { ShieldCheck, Scan, AlertTriangle, RefreshCw, XCircle } from 'lucide-react';
 import PageHeader from '../components/Cards/PageHeader';
 import useCamera from '../hooks/useCamera';
@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 
 export default function LiveVerification() {
   const navigate = useNavigate();
+  const { id } = useParams(); // Get session ID from URL
   const { videoRef, isActive, error: camError, startCamera, stopCamera, captureFrameBase64 } = useCamera();
   
   const [candidates, setCandidates] = useState([]);
@@ -77,9 +78,13 @@ export default function LiveVerification() {
       if (result.verified) {
         setVerificationStatus('success');
         toast.success('Identity Verified Successfully!');
-        // Redirect to dashboard after a delay
+        // Redirect to session room after a delay
         setTimeout(() => {
-          navigate('/');
+          if (id) {
+            navigate(`/session/${id}/monitor`);
+          } else {
+            navigate('/');
+          }
         }, 2000);
       } else {
         setVerificationStatus('failed');
@@ -88,7 +93,7 @@ export default function LiveVerification() {
       console.error(err);
       setVerificationStatus('failed');
     }
-  }, [isActive, candidates, captureFrameBase64, navigate]);
+  }, [isActive, candidates, captureFrameBase64, navigate, id]);
 
   // Run automatically when camera starts
   useEffect(() => {

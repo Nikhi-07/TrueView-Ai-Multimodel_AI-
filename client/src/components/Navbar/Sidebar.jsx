@@ -19,8 +19,6 @@ const mainNavItems = [
 ];
 
 const aiModules = [
-  { path: '/face-registration', label: 'Face Enroll', icon: ScanFace },
-  { path: '/verify-identity', label: 'Verify Identity', icon: UserCheck },
   { path: '/face-mesh', label: 'Face Mesh', icon: Scan },
   { path: '/eye-gaze', label: 'Eye Gaze', icon: Focus },
   { path: '/head-pose', label: 'Head Pose', icon: Compass },

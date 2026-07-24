@@ -11,13 +11,13 @@ import {
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
     return (
-      <div className="glass-strong p-3 rounded-lg border-white/[0.1] shadow-2xl">
-        <p className="text-xs font-semibold text-gray-200 mb-2">{label}</p>
+      <div className="bg-white p-3 rounded-lg border border-gray-200 shadow-lg">
+        <p className="text-xs font-bold text-black mb-2">{label}</p>
         {payload.map((entry, index) => (
           <div key={index} className="flex items-center gap-2 text-[11px] mb-1">
             <div className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
-            <span className="text-gray-400">{entry.name}:</span>
-            <span className="font-mono text-gray-200">{entry.value}</span>
+            <span className="text-gray-600 font-semibold">{entry.name}:</span>
+            <span className="font-mono font-bold text-black">{entry.value}</span>
           </div>
         ))}
       </div>
@@ -37,8 +37,8 @@ export default function Analytics() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
         {/* Weekly Activity (Area Chart) */}
-        <motion.div variants={item} className="glass p-5 rounded-2xl">
-          <h3 className="text-sm font-semibold text-gray-200 mb-6">Weekly Activity & Violations</h3>
+        <motion.div variants={item} className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl">
+          <h3 className="text-sm font-extrabold text-black mb-6">Weekly Activity & Violations</h3>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartDataWeeklyActivity} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
@@ -52,7 +52,7 @@ export default function Analytics() {
                     <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.1)" vertical={false} />
                 <XAxis dataKey="name" stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
                 <YAxis stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
                 <Tooltip content={<CustomTooltip />} />
@@ -64,15 +64,15 @@ export default function Analytics() {
         </motion.div>
 
         {/* System Usage (Bar Chart) */}
-        <motion.div variants={item} className="glass p-5 rounded-2xl">
-          <h3 className="text-sm font-semibold text-gray-200 mb-6">Daily Sessions Volume</h3>
+        <motion.div variants={item} className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl">
+          <h3 className="text-sm font-extrabold text-black mb-6">Daily Sessions Volume</h3>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartDataWeeklyActivity} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.1)" vertical={false} />
                 <XAxis dataKey="name" stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
                 <YAxis stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
-                <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255,255,255,0.02)' }} />
+                <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
                 <Bar dataKey="sessions" fill="#0ea5e9" radius={[4, 4, 0, 0]} name="Sessions" maxBarSize={40} />
               </BarChart>
             </ResponsiveContainer>
@@ -80,8 +80,8 @@ export default function Analytics() {
         </motion.div>
 
         {/* Risk Distribution (Pie Chart) */}
-        <motion.div variants={item} className="glass p-5 rounded-2xl">
-          <h3 className="text-sm font-semibold text-gray-200 mb-6">Risk Level Distribution</h3>
+        <motion.div variants={item} className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl">
+          <h3 className="text-sm font-extrabold text-black mb-6">Risk Level Distribution</h3>
           <div className="h-[300px] w-full flex items-center justify-center">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -106,20 +106,20 @@ export default function Analytics() {
             {chartDataRiskDistribution.map((entry, index) => (
               <div key={index} className="flex items-center gap-2">
                 <div className="w-3 h-3 rounded-full" style={{ backgroundColor: entry.color }} />
-                <span className="text-xs text-gray-400">{entry.name}</span>
+                <span className="text-xs font-semibold text-gray-600">{entry.name}</span>
               </div>
             ))}
           </div>
         </motion.div>
 
         {/* Detection Frequency (Radar Chart) */}
-        <motion.div variants={item} className="glass p-5 rounded-2xl">
-          <h3 className="text-sm font-semibold text-gray-200 mb-6">AI Detection Frequency</h3>
+        <motion.div variants={item} className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl">
+          <h3 className="text-sm font-extrabold text-black mb-6">AI Detection Frequency</h3>
           <div className="h-[300px] w-full">
              <ResponsiveContainer width="100%" height="100%">
               <RadarChart cx="50%" cy="50%" outerRadius="70%" data={chartDataDetectionFrequency}>
-                <PolarGrid stroke="rgba(255,255,255,0.1)" />
-                <PolarAngleAxis dataKey="subject" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                <PolarGrid stroke="rgba(0,0,0,0.1)" />
+                <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 11, fontWeight: 'bold' }} />
                 <PolarRadiusAxis angle={30} domain={[0, 150]} tick={false} axisLine={false} />
                 <Radar name="Detections" dataKey="A" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.3} />
                 <Tooltip content={<CustomTooltip />} />

@@ -1,10 +1,12 @@
 import { motion } from 'framer-motion';
 import { Clock, Calendar, Video, PlayCircle, AlertTriangle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import PageHeader from '../components/Cards/PageHeader';
 import StatusBadge from '../components/Cards/StatusBadge';
 import { mockSessions } from '../utils/mockData';
 
 export default function Sessions() {
+  const navigate = useNavigate();
   const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.1 } } };
   const item = { hidden: { opacity: 0, scale: 0.95 }, show: { opacity: 1, scale: 1 } };
 
@@ -51,7 +53,7 @@ export default function Sessions() {
                  <span className={`text-xs font-bold ${session.risk > 60 ? 'text-danger-400' : session.risk > 20 ? 'text-warning-400' : 'text-success-400'}`}>{session.risk}/100</span>
                </div>
                {session.status === 'Active' ? (
-                 <button className="p-2 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors"><Video size={14}/></button>
+                 <button onClick={() => navigate(`/session/${session.id}/verify`)} className="p-2 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors"><Video size={14}/></button>
                ) : (
                  <button className="p-2 bg-surface-700 text-gray-300 rounded-lg hover:bg-surface-600 transition-colors"><PlayCircle size={14}/></button>
                )}

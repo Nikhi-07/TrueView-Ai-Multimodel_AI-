@@ -341,7 +341,7 @@ export default function VoiceActivityViewer() {
                   className={`p-2 rounded-xl border transition-all ${
                     isMuted
                       ? 'bg-danger-500/20 text-danger-400 border-danger-500/30'
-                      : 'bg-surface-800 hover:bg-surface-700 text-gray-300 border-white/[0.06]'
+                      : 'bg-gray-50 hover:bg-gray-50 text-gray-300 border-gray-200'
                   }`}
                   title={isMuted ? 'Unmute microphone' : 'Mute microphone'}
                 >
@@ -349,7 +349,7 @@ export default function VoiceActivityViewer() {
                 </button>
                 <button
                   onClick={handleResetSession}
-                  className="py-2 px-4 rounded-xl text-xs font-semibold bg-surface-800 hover:bg-surface-700 text-gray-200 border border-white/[0.06] transition-all flex items-center gap-1.5"
+                  className="py-2 px-4 rounded-xl text-xs font-semibold bg-gray-50 hover:bg-gray-50 text-black font-bold border border-gray-200 transition-all flex items-center gap-1.5"
                 >
                   <RefreshCw size={12} /> Reset Counters
                 </button>
@@ -360,7 +360,7 @@ export default function VoiceActivityViewer() {
               className={`py-2 px-4 rounded-xl font-medium flex items-center gap-2 transition-all ${
                 isActive
                   ? 'bg-danger-500/25 hover:bg-danger-500/35 text-danger-400 border border-danger-500/30'
-                  : 'bg-primary-500 hover:bg-primary-600 text-white'
+                  : 'bg-primary-500 hover:bg-primary-600 text-black font-bold'
               }`}
             >
               {isActive ? <Square size={16} /> : <Play size={16} />}
@@ -376,7 +376,7 @@ export default function VoiceActivityViewer() {
         <motion.div variants={item} className="lg:col-span-8 flex flex-col h-[400px] lg:h-auto gap-4">
           
           {/* Wave Oscilloscope Screen */}
-          <div className="glass flex-1 relative rounded-2xl overflow-hidden border-white/[0.1] bg-black/95 flex flex-col justify-between p-4 min-h-[300px]">
+          <div className="bg-white border border-gray-200 shadow-sm flex-1 relative rounded-2xl overflow-hidden border-gray-200 bg-black/95 flex flex-col justify-between p-4 min-h-[300px]">
             
             {/* Header indicators */}
             <div className="flex justify-between items-center w-full z-10">
@@ -391,7 +391,7 @@ export default function VoiceActivityViewer() {
                     variant={isMuted ? 'neutral' : voiceData.voiceStatus === 'speaking' ? 'warning' : voiceData.voiceStatus === 'background_noise' ? 'danger' : 'success'}
                     dot={!isMuted}
                   />
-                  <span className="bg-surface-800/80 backdrop-blur-md border border-white/[0.05] text-[10px] text-gray-400 font-mono px-2 py-1 rounded-md">
+                  <span className="bg-gray-50/80 backdrop-blur-md border border-gray-200 text-[10px] text-gray-600 font-semibold font-mono px-2 py-1 rounded-md">
                     PCM 16kHz
                   </span>
                 </div>
@@ -403,10 +403,10 @@ export default function VoiceActivityViewer() {
               <canvas ref={canvasRef} className="w-full h-40 max-h-48" />
               
               {!isActive && (
-                <div className="absolute text-center text-surface-600 flex flex-col items-center">
-                  <Mic size={64} className="mb-4 text-surface-700 animate-pulse" />
-                  <h3 className="text-lg font-medium text-gray-400">Microphone Inactive</h3>
-                  <p className="text-xs text-gray-500 max-w-xs mt-1">
+                <div className="absolute text-center text-gray-600 font-semibold flex flex-col items-center">
+                  <Mic size={64} className="mb-4 text-gray-600 font-semibold animate-pulse" />
+                  <h3 className="text-lg font-medium text-gray-600 font-semibold">Microphone Inactive</h3>
+                  <p className="text-xs text-gray-600 font-semibold max-w-xs mt-1">
                     Start Voice VAD to stream mic input, monitor acoustic patterns, and visualize waves.
                   </p>
                 </div>
@@ -414,7 +414,7 @@ export default function VoiceActivityViewer() {
             </div>
 
             {/* Footer indicators */}
-            <div className="flex justify-between items-center w-full z-10 border-t border-white/[0.05] pt-3 text-[10px] text-gray-500 font-mono">
+            <div className="flex justify-between items-center w-full z-10 border-t border-gray-200 pt-3 text-[10px] text-gray-600 font-semibold font-mono">
               <div>Session ID: {isActive ? activeSessionId.current.slice(0, 15) + '...' : 'N/A'}</div>
               <div>Packet rate: {isActive ? `${voiceData.fps} chunks/sec` : '0 Chunks'}</div>
             </div>
@@ -428,10 +428,10 @@ export default function VoiceActivityViewer() {
           </div>
 
           {/* Volume Meter Block */}
-          <div className="glass p-5 rounded-2xl space-y-4">
+          <div className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl space-y-4">
             <div className="flex items-center gap-2">
               <Volume2 size={16} className="text-primary-400" />
-              <h3 className="text-sm font-bold text-gray-200">Decibel Peak & Dynamic Volume</h3>
+              <h3 className="text-sm font-bold text-black font-bold">Decibel Peak & Dynamic Volume</h3>
             </div>
             
             <div className="space-y-3">
@@ -440,7 +440,7 @@ export default function VoiceActivityViewer() {
                 value={isActive ? volumePercentage : 0}
                 color={voiceData.voiceStatus === 'speaking' ? 'warning' : voiceData.voiceStatus === 'background_noise' ? 'danger' : 'primary'}
               />
-              <div className="flex justify-between text-[10px] text-gray-500 font-mono">
+              <div className="flex justify-between text-[10px] text-gray-600 font-semibold font-mono">
                 <span>0.0 (Silence)</span>
                 <span>Peak: {voiceData.maxAmplitude.toFixed(4)}</span>
                 <span>0.1 (Loud)</span>
@@ -453,21 +453,21 @@ export default function VoiceActivityViewer() {
         <motion.div variants={item} className="lg:col-span-4 space-y-4 overflow-y-auto">
           
           {/* Proctor Warnings */}
-          <div className="glass p-5 rounded-2xl bg-gradient-to-br from-surface-900 to-surface-800 border-white/[0.08]">
+          <div className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl bg-gray-50 border-gray-200">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <ShieldCheck size={16} className="text-primary-400" />
-                <h3 className="text-sm font-bold text-gray-200">Proctor VAD Activity</h3>
+                <h3 className="text-sm font-bold text-black font-bold">Proctor VAD Activity</h3>
               </div>
               {isActive && !isMuted && (
-                <span className="text-[10px] text-gray-400 font-mono">
+                <span className="text-[10px] text-gray-600 font-semibold font-mono">
                   {(voiceData.confidence * 100).toFixed(0)}% conf
                 </span>
               )}
             </div>
 
-            <div className="bg-surface-950/60 border border-white/[0.04] rounded-xl p-4 text-center my-3 min-h-[100px] flex flex-col justify-center">
-              <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Current Activity Pattern</div>
+            <div className="bg-gray-50/60 border border-gray-200 rounded-xl p-4 text-center my-3 min-h-[100px] flex flex-col justify-center">
+              <div className="text-[10px] text-gray-600 font-semibold uppercase tracking-widest font-bold">Current Activity Pattern</div>
               <motion.div
                 key={voiceData.currentPattern}
                 initial={{ opacity: 0, y: -5 }}
@@ -502,22 +502,22 @@ export default function VoiceActivityViewer() {
           </div>
 
           {/* Speaks timers */}
-          <div className="glass p-5 rounded-2xl space-y-4">
+          <div className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl space-y-4">
             <div className="flex items-center gap-2">
               <Clock size={16} className="text-primary-400" />
-              <h3 className="text-sm font-bold text-gray-200">Conversation Timers</h3>
+              <h3 className="text-sm font-bold text-black font-bold">Conversation Timers</h3>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-surface-800/40 rounded-lg p-3 text-center">
-                <div className="text-[9px] text-gray-500 uppercase tracking-wider font-bold">Speaking Duration</div>
-                <div className="text-xl font-bold font-mono text-gray-200 mt-1">
+              <div className="bg-gray-50/40 rounded-lg p-3 text-center">
+                <div className="text-[9px] text-gray-600 font-semibold uppercase tracking-wider font-bold">Speaking Duration</div>
+                <div className="text-xl font-bold font-mono text-black font-bold mt-1">
                   {voiceData.speakingDuration.toFixed(1)}s
                 </div>
               </div>
-              <div className="bg-surface-800/40 rounded-lg p-3 text-center">
-                <div className="text-[9px] text-gray-500 uppercase tracking-wider font-bold">Silence Duration</div>
-                <div className="text-xl font-bold font-mono text-gray-200 mt-1">
+              <div className="bg-gray-50/40 rounded-lg p-3 text-center">
+                <div className="text-[9px] text-gray-600 font-semibold uppercase tracking-wider font-bold">Silence Duration</div>
+                <div className="text-xl font-bold font-mono text-black font-bold mt-1">
                   {voiceData.silenceDuration.toFixed(1)}s
                 </div>
               </div>
@@ -531,23 +531,23 @@ export default function VoiceActivityViewer() {
           </div>
 
           {/* Acoustic metrics */}
-          <div className="glass p-5 rounded-2xl space-y-3">
+          <div className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl space-y-3">
             <div className="flex items-center gap-2 mb-2">
               <BarChart2 size={16} className="text-primary-400" />
-              <h3 className="text-sm font-bold text-gray-200">Signal Parameters</h3>
+              <h3 className="text-sm font-bold text-black font-bold">Signal Parameters</h3>
             </div>
 
             <div className="space-y-3 pt-1">
               {/* Noise floor gauge */}
               <div>
-                <div className="flex justify-between text-[10px] text-gray-400 mb-1">
+                <div className="flex justify-between text-[10px] text-gray-600 font-semibold mb-1">
                   <span>Dynamic Noise Floor</span>
                   <span className="font-mono">{voiceData.noiseLevel.toFixed(5)}</span>
                 </div>
                 <ProgressBar value={isActive ? noiseFloorPct : 0} color={voiceData.noiseLevel > 0.015 ? 'danger' : 'success'} />
               </div>
 
-              <div className="grid grid-cols-2 gap-2 text-[10px] text-gray-400 font-mono border-t border-white/[0.05] pt-3">
+              <div className="grid grid-cols-2 gap-2 text-[10px] text-gray-600 font-semibold font-mono border-t border-gray-200 pt-3">
                 <div className="flex justify-between">
                   <span>ZCR:</span>
                   <span>{voiceData.zcr.toFixed(3)}</span>

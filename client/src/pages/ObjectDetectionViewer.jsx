@@ -222,7 +222,7 @@ export default function ObjectDetectionViewer() {
             {isActive && (
               <button
                 onClick={handleResetSession}
-                className="py-2 px-4 rounded-xl text-xs font-semibold bg-surface-800 hover:bg-surface-700 text-gray-200 border border-white/[0.06] transition-all"
+                className="py-2 px-4 rounded-xl text-xs font-semibold bg-gray-50 hover:bg-gray-50 text-black font-bold border border-gray-200 transition-all"
               >
                 Reset Tracker
               </button>
@@ -232,7 +232,7 @@ export default function ObjectDetectionViewer() {
               className={`py-2 px-4 rounded-xl font-medium flex items-center gap-2 transition-all ${
                 isActive
                   ? 'bg-danger-500/25 hover:bg-danger-500/35 text-danger-400 border border-danger-500/30'
-                  : 'bg-primary-500 hover:bg-primary-600 text-white'
+                  : 'bg-primary-500 hover:bg-primary-600 text-black font-bold'
               }`}
             >
               {isActive ? <Square size={16} /> : <Play size={16} />}
@@ -246,7 +246,7 @@ export default function ObjectDetectionViewer() {
         
         {/* ══════════ Left Side: Bounding Box Viewer ══════════ */}
         <motion.div variants={item} className="lg:col-span-8 flex flex-col h-[500px] lg:h-auto">
-          <div className="glass flex-1 relative rounded-2xl overflow-hidden border-white/[0.1] h-full bg-black flex items-center justify-center">
+          <div className="bg-white border border-gray-200 shadow-sm flex-1 relative rounded-2xl overflow-hidden border-gray-200 h-full bg-black flex items-center justify-center">
             
             {/* Hidden raw video feed */}
             <video
@@ -274,10 +274,10 @@ export default function ObjectDetectionViewer() {
                 />
               </div>
             ) : (
-              <div className="text-center text-surface-600 p-8 flex flex-col items-center">
-                <Boxes size={64} className="mb-4 text-surface-700 animate-pulse" />
-                <h3 className="text-lg font-medium text-gray-400">Environment Scan Off</h3>
-                <p className="text-xs text-gray-500 max-w-xs mt-1">
+              <div className="text-center text-gray-600 font-semibold p-8 flex flex-col items-center">
+                <Boxes size={64} className="mb-4 text-gray-600 font-semibold animate-pulse" />
+                <h3 className="text-lg font-medium text-gray-600 font-semibold">Environment Scan Off</h3>
+                <p className="text-xs text-gray-600 font-semibold max-w-xs mt-1">
                   Start the workspace scan to initiate YOLOv11 boundary tracking.
                 </p>
               </div>
@@ -296,10 +296,10 @@ export default function ObjectDetectionViewer() {
         <motion.div variants={item} className="lg:col-span-4 space-y-4 overflow-y-auto pr-1">
           
           {/* Proctor Flags Summary */}
-          <div className="glass p-5 rounded-2xl bg-gradient-to-br from-surface-900 to-surface-800 border-white/[0.08] space-y-4">
+          <div className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl bg-gray-50 border-gray-200 space-y-4">
             <div className="flex items-center gap-2">
               <ShieldCheck size={16} className="text-primary-400" />
-              <h3 className="text-sm font-bold text-gray-200">Workspace Status</h3>
+              <h3 className="text-sm font-bold text-black font-bold">Workspace Status</h3>
             </div>
 
             <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
@@ -321,7 +321,7 @@ export default function ObjectDetectionViewer() {
               <div className={`p-3 rounded-xl border ${
                 detectorData.summary.phone_detected
                   ? 'bg-danger-500/15 border-danger-500/30 text-danger-400'
-                  : 'bg-surface-850 border-white/[0.04] text-gray-400'
+                  : 'bg-gray-50 border-gray-200 text-gray-600 font-semibold'
               }`}>
                 <Smartphone size={18} className="mx-auto mb-1.5" />
                 <div className="font-bold">Mobile Phone</div>
@@ -334,7 +334,7 @@ export default function ObjectDetectionViewer() {
               <div className={`p-3 rounded-xl border ${
                 detectorData.summary.book_detected
                   ? 'bg-warning-500/15 border-warning-500/30 text-warning-400'
-                  : 'bg-surface-850 border-white/[0.04] text-gray-400'
+                  : 'bg-gray-50 border-gray-200 text-gray-600 font-semibold'
               }`}>
                 <BookOpen size={18} className="mx-auto mb-1.5" />
                 <div className="font-bold">Books/Docs</div>
@@ -365,21 +365,21 @@ export default function ObjectDetectionViewer() {
           </div>
 
           {/* Active Objects List */}
-          <div className="glass p-5 rounded-2xl space-y-3">
+          <div className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl space-y-3">
             <div className="flex items-center gap-2 mb-2">
               <Boxes size={16} className="text-primary-400" />
-              <h3 className="text-sm font-bold text-gray-200">Tracked Items List</h3>
+              <h3 className="text-sm font-bold text-black font-bold">Tracked Items List</h3>
             </div>
 
             {detectorData.detections.length > 0 ? (
               <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
                 {detectorData.detections.map((det, index) => (
-                  <div key={index} className="bg-surface-800/40 border border-white/[0.03] rounded-lg p-2.5 flex items-center justify-between text-xs">
+                  <div key={index} className="bg-gray-50/40 border border-gray-200 rounded-lg p-2.5 flex items-center justify-between text-xs">
                     <div>
-                      <div className="font-bold text-gray-200 capitalize">
+                      <div className="font-bold text-black font-bold capitalize">
                         {det.label} <span className="text-primary-400 font-mono">#{det.track_id ?? 'N/A'}</span>
                       </div>
-                      <div className="text-[10px] text-gray-500 mt-0.5">
+                      <div className="text-[10px] text-gray-600 font-semibold mt-0.5">
                         Duration: {det.duration_seconds ?? 0}s | Motion: {det.total_movement_px ? Math.round(det.total_movement_px) : 0}px
                       </div>
                     </div>
@@ -393,30 +393,30 @@ export default function ObjectDetectionViewer() {
                 ))}
               </div>
             ) : (
-              <div className="text-center text-gray-500 py-6 text-xs">
+              <div className="text-center text-gray-600 font-semibold py-6 text-xs">
                 No active objects tracked in frame.
               </div>
             )}
           </div>
 
           {/* Pipeline Stats */}
-          <div className="glass p-5 rounded-2xl space-y-3">
+          <div className="bg-white border border-gray-200 shadow-sm p-5 rounded-2xl space-y-3">
             <div className="flex items-center gap-2">
               <Activity size={16} className="text-primary-400" />
-              <h3 className="text-sm font-bold text-gray-200">Processing Stats</h3>
+              <h3 className="text-sm font-bold text-black font-bold">Processing Stats</h3>
             </div>
 
             <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="bg-surface-800/40 rounded-lg p-2.5 text-center">
-                <div className="text-[9px] text-gray-500 uppercase font-bold tracking-wider">Inference Speed</div>
-                <div className="text-lg font-bold font-mono text-gray-200 mt-1">
+              <div className="bg-gray-50/40 rounded-lg p-2.5 text-center">
+                <div className="text-[9px] text-gray-600 font-semibold uppercase font-bold tracking-wider">Inference Speed</div>
+                <div className="text-lg font-bold font-mono text-black font-bold mt-1">
                   {detectorData.processingTimeMs}ms
                 </div>
               </div>
               
-              <div className="bg-surface-800/40 rounded-lg p-2.5 text-center">
-                <div className="text-[9px] text-gray-500 uppercase font-bold tracking-wider">Frames/sec (FPS)</div>
-                <div className="text-lg font-bold font-mono text-gray-200 mt-1">
+              <div className="bg-gray-50/40 rounded-lg p-2.5 text-center">
+                <div className="text-[9px] text-gray-600 font-semibold uppercase font-bold tracking-wider">Frames/sec (FPS)</div>
+                <div className="text-lg font-bold font-mono text-black font-bold mt-1">
                   {isActive ? detectorData.fps : 0}
                 </div>
               </div>

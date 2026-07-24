@@ -92,17 +92,23 @@ const logUnifiedEvent = async (req, res, next) => {
 // @access  Public / Private
 const getDashboardStats = async (req, res, next) => {
   try {
-    const activeSessionsCount = await Session.countDocuments({ status: 'ACTIVE' });
-    const totalSessionsCount = await Session.countDocuments();
-    const totalAlertsCount = await Alert.countDocuments();
+    let query = {};
+    if (req.user && req.user.role !== 'admin') {
+      query.userEmail = req.user.email;
+    }
+
+    const activeSessionsCount = await Session.countDocuments({ ...query, status: 'ACTIVE' });
+    const totalSessionsCount = await Session.countDocuments(query);
+    const totalAlertsCount = await Alert.countDocuments(query);
     const phoneDetectionsCount = await Session.aggregate([
+      { $match: query },
       { $group: { _id: null, total: { $sum: '$phoneDetections' } } }
     ]);
 
     const totalPhoneViolations = phoneDetectionsCount[0]?.total || 0;
 
-    const recentAlerts = await Alert.find().sort({ timestamp: -1 }).limit(10);
-    const recentSessions = await Session.find().sort({ startTime: -1 }).limit(10);
+    const recentAlerts = await Alert.find(query).sort({ timestamp: -1 }).limit(10);
+    const recentSessions = await Session.find(query).sort({ startTime: -1 }).limit(10);
 
     const timelineItems = recentAlerts.map(alert => ({
       id: alert._id,
@@ -129,7 +135,24 @@ const getDashboardStats = async (req, res, next) => {
   }
 };
 
+// @desc    Get all alerts for the current user
+// @route   GET /api/ai-engine/alerts
+// @access  Private
+const getAlerts = async (req, res, next) => {
+  try {
+    let query = {};
+    if (req.user && req.user.role !== 'admin') {
+      query.userEmail = req.user.email;
+    }
+    const alerts = await Alert.find(query).sort({ timestamp: -1 });
+    res.json({ success: true, alerts });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   logUnifiedEvent,
   getDashboardStats,
+  getAlerts,
 };

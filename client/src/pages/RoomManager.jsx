@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { 
-  Video, Users, Plus, Shield, Square, AlertTriangle, Volume2, Copy, Search, RefreshCw
+  Video, Users, Plus, Shield, Square, AlertTriangle, Volume2, Copy, Search, RefreshCw, PhoneOff
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PageHeader from '../components/Cards/PageHeader';
@@ -30,6 +30,10 @@ export default function RoomManager() {
 
   // Host Action Alerts
   const [toastMsg, setToastMsg] = useState(null);
+
+  const formatTime = (date) => {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
 
   useEffect(() => {
     fetchRooms();
@@ -75,7 +79,7 @@ export default function RoomManager() {
   };
 
   const copyRoomLink = (roomId) => {
-    navigator.clipboard.writeText(`${window.location.origin}/rooms/${roomId}`);
+    navigator.clipboard.writeText(`${window.location.origin}/session/${roomId}/verify`);
     showNotification(`Room link ${roomId} copied to clipboard!`);
   };
 
@@ -128,141 +132,149 @@ export default function RoomManager() {
         </div>
       )}
 
-      {/* ACTIVE ROOM VIEW */}
+      {/* ACTIVE ROOM VIEW (Zoom / Meet Style) */}
       {activeRoom ? (
-        <div className="space-y-4">
-          {/* Host Control Bar */}
-          <div className="bg-white border border-slate-200 p-4 rounded-xl flex items-center justify-between shadow-sm">
+        <div className="fixed inset-0 z-[100] bg-[#202124] text-white flex flex-col font-sans overflow-hidden">
+          
+          {/* Top Bar */}
+          <div className="h-14 px-6 flex items-center justify-between shrink-0 bg-gradient-to-b from-black/60 to-transparent absolute top-0 left-0 right-0 z-10 pointer-events-none">
             <div className="flex items-center gap-3">
-              <button
-                onClick={() => setActiveRoom(null)}
-                className="text-xs px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 font-medium"
-              >
-                Back to All Rooms
-              </button>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-base font-bold text-slate-900">{activeRoom.title}</h2>
-                  <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-300">
-                    {activeRoom.id}
-                  </span>
-                  <span className="badge-neutral">{activeRoom.mode}</span>
-                </div>
-                <p className="text-xs text-slate-500">Host: <b>{activeRoom.host}</b> • Participants: {activeRoom.participants?.length || 0} / {activeRoom.maxParticipants}</p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => copyRoomLink(activeRoom.id)}
-                className="btn-ghost py-1.5 px-3 text-xs flex items-center gap-1.5"
-              >
-                <Copy size={14} />
-                Copy Link
-              </button>
-              <button
-                onClick={() => showNotification("Broadcasting warning to all participants...")}
-                className="btn-ghost py-1.5 px-3 text-xs flex items-center gap-1.5 text-amber-700 border-amber-200 bg-amber-50 hover:bg-amber-100"
-              >
-                <Volume2 size={14} />
-                Broadcast Warning
-              </button>
-              <button
-                onClick={() => setActiveRoom(null)}
-                className="btn-danger py-1.5 px-3 text-xs flex items-center gap-1.5"
-              >
-                <Square size={14} />
-                End Session
-              </button>
+              <span className="px-2.5 py-1 bg-red-600 rounded text-xs font-bold tracking-widest animate-pulse">REC</span>
+              <h2 className="text-sm font-semibold">{activeRoom.title}</h2>
+              <span className="text-xs text-gray-400 font-mono">({activeRoom.id})</span>
             </div>
           </div>
 
-          {/* Multi-Candidate Meet/Zoom Style Video Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {/* Host Live Feed */}
-            <div className="bg-white border border-slate-300 p-3 rounded-xl relative flex flex-col space-y-3 shadow-sm">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
-                  Host Feed (You)
-                </span>
-                <span className="text-[10px] font-mono text-slate-500">1080p HD</span>
-              </div>
-              <div className="h-[220px] rounded-lg overflow-hidden bg-slate-900 border border-slate-300 relative">
-                <CameraFeed isActive={true} />
-              </div>
-              <div className="flex items-center justify-between text-xs text-slate-600">
-                <span>Status: <b className="text-emerald-700">PROCTOR ACTIVE</b></span>
-                <span>Mode: <b>{activeRoom.mode}</b></span>
+          {/* Video Grid Area */}
+          <div className="flex-1 p-6 flex flex-col justify-center items-center relative overflow-hidden min-h-0 pt-16 pb-24">
+             <div className={`w-full max-w-7xl grid gap-4 place-content-center h-full ${
+               activeRoom.participants?.length > 3 ? 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4' :
+               activeRoom.participants?.length > 1 ? 'grid-cols-2 lg:grid-cols-3' : 
+               'grid-cols-1 md:grid-cols-2'
+             }`}>
+                
+                {/* Host Live Feed */}
+                <div className="relative bg-[#3c4043] rounded-xl overflow-hidden shadow-xl aspect-video border border-[#5f6368]/30 flex flex-col group">
+                  <div className="absolute inset-0 z-0">
+                    <CameraFeed isActive={true} />
+                  </div>
+                  <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg flex items-center gap-2 z-10 border border-white/10">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]"></span>
+                    <span className="text-xs font-semibold text-white">Host (You)</span>
+                  </div>
+                </div>
+
+                {/* Candidate Participants */}
+                {activeRoom.participants?.map((candidate, idx) => {
+                  const isHighRisk = candidate.riskLevel?.includes('HIGH') || candidate.riskScore > 50;
+
+                  return (
+                    <div
+                      key={candidate.id || idx}
+                      className={`relative bg-[#3c4043] rounded-xl overflow-hidden shadow-xl aspect-video border transition-colors flex items-center justify-center group ${
+                        isHighRisk ? 'border-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.2)]' : 'border-[#5f6368]/30'
+                      }`}
+                    >
+                      {/* Placeholder for Candidate Video Feed */}
+                      <div className="w-20 h-20 rounded-full bg-blue-600 flex items-center justify-center text-3xl font-normal text-white shadow-lg">
+                        {candidate.name.charAt(0)}
+                      </div>
+
+                      {/* Overlays */}
+                      <div className="absolute top-3 right-3 flex flex-col gap-2 items-end z-10">
+                         {isHighRisk && (
+                           <div className="bg-rose-600/90 backdrop-blur-md text-white text-[10px] font-bold px-2.5 py-1 rounded shadow-lg border border-rose-500/50 flex items-center gap-1.5">
+                             <AlertTriangle size={10} /> High Risk
+                           </div>
+                         )}
+                         {candidate.phoneDetected && (
+                           <div className="bg-orange-500/90 backdrop-blur-md text-white text-[10px] font-bold px-2.5 py-1 rounded shadow-lg border border-orange-400/50 flex items-center gap-1.5">
+                             <PhoneOff size={10} /> Phone
+                           </div>
+                         )}
+                      </div>
+
+                      <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg flex items-center gap-2 z-10 border border-white/10">
+                        <span className="text-xs font-semibold text-white truncate max-w-[120px]">{candidate.name}</span>
+                        <div className="w-px h-3 bg-gray-500 mx-1"></div>
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${isHighRisk ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                          Risk: {candidate.riskScore}%
+                        </span>
+                      </div>
+
+                      {/* Hover Actions */}
+                      <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] opacity-0 group-hover:opacity-100 transition-opacity z-20 flex items-center justify-center gap-3">
+                        <button
+                          onClick={() => triggerLivenessChallenge(candidate.name)}
+                          className="w-10 h-10 rounded-full bg-white/10 hover:bg-blue-500 text-white flex items-center justify-center transition-colors"
+                          title="Trigger Liveness Check"
+                        >
+                          <RefreshCw size={16} />
+                        </button>
+                        <button
+                          onClick={() => issueWarning(candidate.name)}
+                          className="w-10 h-10 rounded-full bg-white/10 hover:bg-amber-500 text-white flex items-center justify-center transition-colors"
+                          title="Issue Warning"
+                        >
+                          <AlertTriangle size={16} />
+                        </button>
+                        <button
+                          onClick={() => kickCandidate(candidate.id)}
+                          className="w-10 h-10 rounded-full bg-white/10 hover:bg-rose-600 text-white flex items-center justify-center transition-colors"
+                          title="Kick Candidate"
+                        >
+                          <Square size={16} />
+                        </button>
+                      </div>
+
+                    </div>
+                  );
+                })}
+             </div>
+          </div>
+
+          {/* Bottom Control Bar */}
+          <div className="h-20 bg-[#202124] px-6 flex items-center justify-between shrink-0 absolute bottom-0 left-0 right-0 z-50">
+            
+            <div className="flex items-center gap-4 w-64 text-[#9aa0a6]">
+              <span className="text-sm font-medium">{formatTime(new Date())}</span>
+              <div className="w-px h-4 bg-[#5f6368]"></div>
+              <span className="text-sm font-medium">{activeRoom.mode} Mode</span>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => copyRoomLink(activeRoom.id)}
+                className="w-12 h-12 rounded-full bg-[#3c4043] hover:bg-[#4a4d51] text-white flex items-center justify-center transition-colors tooltip"
+                title="Copy Invite Link"
+              >
+                <Copy size={20} />
+              </button>
+              
+              <button
+                onClick={() => showNotification("Broadcasting warning to all participants...")}
+                className="w-12 h-12 rounded-full bg-[#3c4043] hover:bg-amber-600 text-white flex items-center justify-center transition-colors tooltip"
+                title="Broadcast Audio Warning"
+              >
+                <Volume2 size={20} />
+              </button>
+
+              <button
+                onClick={() => setActiveRoom(null)}
+                className="w-16 h-10 rounded-full bg-[#ea4335] hover:bg-[#d93025] text-white flex items-center justify-center transition-colors shadow-lg px-6"
+                title="End Session"
+              >
+                <PhoneOff size={22} />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 w-64 text-[#9aa0a6]">
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-[#3c4043] rounded-lg text-sm">
+                 <Users size={16} />
+                 <span>{activeRoom.participants?.length || 0} / {activeRoom.maxParticipants}</span>
               </div>
             </div>
 
-            {/* Candidate Participants */}
-            {activeRoom.participants?.map((candidate, idx) => {
-              const isHighRisk = candidate.riskLevel?.includes('HIGH') || candidate.riskScore > 50;
-
-              return (
-                <div
-                  key={candidate.id || idx}
-                  className={`bg-white p-3 rounded-xl border relative flex flex-col space-y-3 shadow-sm ${
-                    isHighRisk ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-slate-900 truncate max-w-[170px]">
-                      {candidate.name}
-                    </span>
-                    <span className={isHighRisk ? 'badge-danger' : 'badge-success'}>
-                      Risk: {candidate.riskScore}%
-                    </span>
-                  </div>
-
-                  <div className="h-[220px] rounded-lg overflow-hidden bg-slate-900 border border-slate-300 relative flex items-center justify-center">
-                    <div className="w-16 h-16 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-lg font-bold text-white">
-                      {candidate.name.charAt(0)}
-                    </div>
-
-                    {candidate.phoneDetected && (
-                      <div className="absolute top-2 right-2 bg-rose-600 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow">
-                        Phone Detected
-                      </div>
-                    )}
-
-                    <div className="absolute bottom-2 left-2 right-2 bg-slate-900/90 border border-slate-700 p-2 rounded-md flex items-center justify-between text-[11px] text-slate-200">
-                      <span>Gaze: <b>{candidate.gaze}</b></span>
-                      <span>Pose: <b>{candidate.pose}</b></span>
-                    </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
-                    <button
-                      onClick={() => triggerLivenessChallenge(candidate.name)}
-                      className="text-[11px] py-1 px-2.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 font-medium flex items-center gap-1"
-                    >
-                      <RefreshCw size={12} />
-                      Liveness
-                    </button>
-
-                    <button
-                      onClick={() => issueWarning(candidate.name)}
-                      className="text-[11px] py-1 px-2.5 rounded bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200 font-medium flex items-center gap-1"
-                    >
-                      <AlertTriangle size={12} />
-                      Warn
-                    </button>
-
-                    <button
-                      onClick={() => kickCandidate(candidate.id)}
-                      className="text-[11px] py-1 px-2.5 rounded bg-rose-50 text-rose-800 hover:bg-rose-100 border border-rose-200 font-medium flex items-center gap-1"
-                    >
-                      <Square size={12} />
-                      Kick
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
           </div>
         </div>
       ) : (

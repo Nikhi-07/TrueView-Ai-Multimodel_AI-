@@ -7,12 +7,12 @@ export default defineConfig({
   server: {
     proxy: {
       '/ai-api': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/ai-api/, '/api'),
       },
       '/api': {
-        target: 'http://localhost:5001',
+        target: 'http://127.0.0.1:5001',
         changeOrigin: true,
       }
     }

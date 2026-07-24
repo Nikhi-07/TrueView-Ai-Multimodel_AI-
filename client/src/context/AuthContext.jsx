@@ -47,6 +47,34 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const verifyCredentials = async (email, password) => {
+    try {
+      const res = await api.post('/auth/verify-credentials', { email, password });
+      return res.data;
+    } catch (error) {
+      const msg = error.response?.data?.message || 'Verification failed';
+      toast.error(msg);
+      throw new Error(msg);
+    }
+  };
+
+  const faceLogin = async (email, image) => {
+    try {
+      const res = await api.post('/auth/face-login', { email, image });
+      const { token, ...userData } = res.data;
+      
+      localStorage.setItem('trueview_token', token);
+      setUser(userData);
+      setIsAuthenticated(true);
+      toast.success('Face login successful');
+      return true;
+    } catch (error) {
+      const msg = error.response?.data?.message || 'Face login failed';
+      toast.error(msg);
+      throw new Error(msg);
+    }
+  };
+
   const register = async (userData) => {
     try {
       const res = await api.post('/auth/register', userData);
@@ -114,6 +142,8 @@ export function AuthProvider({ children }) {
       isAuthenticated, 
       loading, 
       login, 
+      verifyCredentials,
+      faceLogin,
       register, 
       logout, 
       forgotPassword, 

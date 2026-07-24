@@ -66,6 +66,8 @@ class UnifiedDecisionEngine:
         # Adjust score if uncertainty is UNCERTAIN or REJECTED
         if uncertainty_eval.get("uncertainty_level") == "UNCERTAIN":
             risk_increment *= 0.5
+            
+        self._score += risk_increment
 
         import math
         if math.isnan(self._score) or math.isinf(self._score):
