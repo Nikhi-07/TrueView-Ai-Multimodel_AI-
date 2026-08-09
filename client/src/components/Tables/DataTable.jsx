@@ -22,9 +22,9 @@ export default function DataTable({ columns = [], data = [], className }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-white/[0.04]">
-            {data.length === 0 ? (
+            {!data?.length ? (
               <tr>
-                <td colSpan={columns.length} className="px-5 py-12 text-center text-gray-500 text-sm">
+                <td colSpan={columns?.length || 1} className="px-5 py-12 text-center text-gray-500 text-sm">
                   No data available
                 </td>
               </tr>
@@ -46,7 +46,7 @@ export default function DataTable({ columns = [], data = [], className }) {
       {/* Pagination */}
       <div className="flex items-center justify-between px-5 py-3 border-t border-white/[0.06]">
         <span className="text-xs text-gray-500">
-          Showing {data.length > 0 ? 1 : 0}–{data.length} of {data.length} results
+          Showing {data?.length > 0 ? 1 : 0}–{data?.length || 0} of {data?.length || 0} results
         </span>
         <div className="flex items-center gap-1">
           <button className="p-1.5 rounded-lg hover:bg-white/[0.05] text-gray-500 transition-colors">

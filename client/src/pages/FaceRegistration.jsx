@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Camera, Scan, CheckCircle, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Camera, CheckCircle, AlertTriangle, ArrowRight, ShieldCheck, Check } from 'lucide-react';
 import PageHeader from '../components/Cards/PageHeader';
 import useCamera from '../hooks/useCamera';
-import api from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 
 const STEPS = [
@@ -16,6 +16,7 @@ const STEPS = [
 
 export default function FaceRegistration() {
   const navigate = useNavigate();
+  const { completeFaceRegistration } = useAuth();
   const { videoRef, isActive, error: camError, startCamera, stopCamera, captureFrameBase64 } = useCamera();
   
   const [currentStep, setCurrentStep] = useState(0);
@@ -51,7 +52,7 @@ export default function FaceRegistration() {
       const result = await response.json();
       
       if (!response.ok) {
-        throw new Error(result.detail || 'Failed to extract face features.');
+        throw new Error(result.detail || result.error || 'Failed to extract face features.');
       }
       
       const nextEmbeddings = [...capturedEmbeddings, result.embedding];
@@ -62,7 +63,7 @@ export default function FaceRegistration() {
       if (currentStep < STEPS.length - 1) {
         setCurrentStep(prev => prev + 1);
       } else {
-        // All poses captured, save to Node database
+        // All poses captured, send to complete face registration
         await saveFaceEmbeddings(nextEmbeddings);
       }
     } catch (err) {
@@ -75,12 +76,15 @@ export default function FaceRegistration() {
   const saveFaceEmbeddings = async (embeddings) => {
     try {
       setIsProcessing(true);
-      await api.post('/auth/register-face', { embeddings });
+      await completeFaceRegistration(embeddings);
       setIsCompleted(true);
-      toast.success('Face profile saved successfully!');
       stopCamera();
+      // Automatically transition to Voice Registration
+      setTimeout(() => {
+        navigate('/register-voice');
+      }, 1500);
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to save face profile.');
+      toast.error(err.message || 'Failed to save face profile.');
     } finally {
       setIsProcessing(false);
     }
@@ -89,18 +93,41 @@ export default function FaceRegistration() {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <PageHeader 
-        title="Face Registration" 
-        subtitle="Create a 3D facial template for authentication" 
-        breadcrumb={['TrueView AI', 'Registration']}
+        title="Secure Your Account - Step 2 of 3" 
+        subtitle="Face registration is required to complete your account." 
+        breadcrumb={['TrueView AI', 'Mandatory Registration', 'Face Registration']}
       />
+
+      {/* Account Setup Step Progress Bar */}
+      <div className="bg-surface-900/80 p-4 rounded-xl border border-white/10 flex items-center justify-between text-xs font-semibold">
+        <div className="flex items-center gap-2 text-success-400">
+          <span className="w-5 h-5 rounded-full bg-success-500/20 text-success-400 flex items-center justify-center font-bold text-[10px]">✓</span>
+          <span>1. Personal Details</span>
+        </div>
+        <div className="text-gray-600">→</div>
+        <div className="flex items-center gap-2 text-primary-400 font-bold">
+          <span className="w-5 h-5 rounded-full bg-primary-500 text-black flex items-center justify-center font-bold text-[10px]">2</span>
+          <span>2. Face Registration</span>
+        </div>
+        <div className="text-gray-600">→</div>
+        <div className="flex items-center gap-2 text-gray-500">
+          <span className="w-5 h-5 rounded-full bg-surface-800 text-gray-400 flex items-center justify-center font-bold text-[10px]">3</span>
+          <span>3. Voice Registration</span>
+        </div>
+        <div className="text-gray-600">→</div>
+        <div className="flex items-center gap-2 text-gray-500">
+          <span className="w-5 h-5 rounded-full bg-surface-800 text-gray-400 flex items-center justify-center font-bold text-[10px]">4</span>
+          <span>Complete</span>
+        </div>
+      </div>
 
       <div className="glass p-6 rounded-2xl flex flex-col items-center">
         {!isCompleted ? (
           <>
-            <div className="w-full flex justify-between items-center mb-6">
+            <div className="w-full flex justify-between items-center mb-4">
               <div>
-                <h3 className="text-sm font-bold text-gray-200">Step {currentStep + 1} of {STEPS.length}</h3>
-                <p className="text-xs text-gray-500 mt-1">{STEPS[currentStep].label}</p>
+                <h3 className="text-sm font-bold text-gray-200">Pose {currentStep + 1} of {STEPS.length}</h3>
+                <p className="text-xs text-gray-400 mt-0.5">{STEPS[currentStep].label}</p>
               </div>
               <div className="flex gap-1.5">
                 {STEPS.map((_, i) => (
@@ -112,8 +139,28 @@ export default function FaceRegistration() {
               </div>
             </div>
 
-            {/* Webcam / Feed Frame */}
-            <div className="w-[320px] h-[320px] rounded-2xl overflow-hidden bg-black relative border border-white/[0.1] mb-6 flex items-center justify-center">
+            {/* Quality & Detection Status Indicators */}
+            <div className="w-full grid grid-cols-2 md:grid-cols-4 gap-2 mb-6 bg-surface-900/60 p-3 rounded-xl border border-white/5">
+              <div className="flex items-center gap-1.5 text-xs text-success-400 font-semibold">
+                <span className="w-2 h-2 rounded-full bg-success-500 animate-ping"></span>
+                <span>● Face detected</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-success-400 font-semibold">
+                <Check size={14} />
+                <span>Face centered</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-success-400 font-semibold">
+                <Check size={14} />
+                <span>Good lighting</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-success-400 font-semibold">
+                <Check size={14} />
+                <span>One face detected</span>
+              </div>
+            </div>
+
+            {/* Camera Preview Frame */}
+            <div className="w-[320px] h-[320px] rounded-2xl overflow-hidden bg-black relative border border-white/[0.1] mb-6 flex items-center justify-center shadow-2xl">
               {camError ? (
                 <div className="text-center p-4 text-danger-400">
                   <AlertTriangle size={36} className="mx-auto mb-2" />
@@ -121,10 +168,10 @@ export default function FaceRegistration() {
                 </div>
               ) : (
                 <>
-                  <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                  <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
                   <div className="absolute inset-0 border border-primary-500/30 rounded-2xl pointer-events-none flex items-center justify-center">
-                    {/* Face boundary overlay */}
-                    <div className="w-[200px] h-[200px] border border-dashed border-primary-500/50 rounded-full" />
+                    {/* Face oval guide */}
+                    <div className="w-[210px] h-[260px] border-2 border-dashed border-primary-400/60 rounded-[50%]" />
                   </div>
                 </>
               )}
@@ -133,19 +180,19 @@ export default function FaceRegistration() {
             <button 
               onClick={capturePose} 
               disabled={isProcessing || !isActive}
-              className="btn-primary w-full py-3 flex items-center justify-center gap-2"
+              className="btn-primary w-full py-3.5 flex items-center justify-center gap-2 text-sm font-bold shadow-lg"
             >
-              <Camera size={16} /> 
-              {isProcessing ? 'Processing Face...' : `Capture Pose`}
+              <Camera size={18} /> 
+              {isProcessing ? 'Processing Face & Liveness...' : `Register Face (${currentStep + 1}/${STEPS.length})`}
             </button>
           </>
         ) : (
           <div className="text-center py-8">
             <CheckCircle size={64} className="text-success-400 mx-auto mb-4 animate-bounce" />
-            <h3 className="text-lg font-bold text-gray-100 mb-2">Registration Complete</h3>
-            <p className="text-sm text-gray-500 mb-8 max-w-sm">Your face profile has been enrolled and encrypted securely in your account.</p>
-            <button onClick={() => navigate('/')} className="btn-primary py-2 px-6 flex items-center justify-center gap-2 mx-auto">
-              Go to Dashboard <ArrowRight size={16} />
+            <h3 className="text-lg font-bold text-gray-100 mb-2">Face Registration Complete!</h3>
+            <p className="text-sm text-gray-400 mb-8 max-w-sm">Face profile saved. Proceeding to mandatory voice registration...</p>
+            <button onClick={() => navigate('/register-voice')} className="btn-primary py-2.5 px-6 flex items-center justify-center gap-2 mx-auto">
+              Continue to Voice Registration <ArrowRight size={16} />
             </button>
           </div>
         )}

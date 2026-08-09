@@ -70,7 +70,8 @@ export default function LiveVerification() {
       const result = await response.json();
       
       if (!response.ok) {
-        throw new Error(result.detail || 'Verification error');
+        toast.error(result.detail || result.error || 'Verification error');
+        throw new Error(result.detail || result.error || 'Verification error');
       }
 
       setConfidence(result.confidence * 100);

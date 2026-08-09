@@ -3,7 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import LoadingSpinner from '../Loading/LoadingSpinner';
 
 export default function ProtectedRoute() {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, pendingVoiceToken, loading } = useAuth();
 
   if (loading) {
     return (
@@ -11,6 +11,10 @@ export default function ProtectedRoute() {
         <LoadingSpinner size="lg" />
       </div>
     );
+  }
+
+  if (!isAuthenticated && (pendingVoiceToken || localStorage.getItem('trueview_pending_voice_token'))) {
+    return <Navigate to="/register-voice" replace />;
   }
 
   return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace />;

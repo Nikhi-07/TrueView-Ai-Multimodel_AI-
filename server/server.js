@@ -29,21 +29,36 @@ const PORT = process.env.PORT || 5000;
 // Security Middlewares
 app.use(helmet());
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (
+      origin === process.env.CLIENT_URL ||
+      /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+      origin.startsWith('chrome-extension://')
+    ) {
+      return callback(null, true);
+    }
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true
 }));
 
 // Body parser
 app.use(express.json({ limit: '10mb' }));
 
+// Disable Mongoose command buffering so queries fail fast if DB is disconnected
+mongoose.set('bufferCommands', false);
+
 // Database connection
 const connectDB = async () => {
   try {
-    const conn = await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/trueview');
+    const conn = await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/trueview', {
+      serverSelectionTimeoutMS: 3000,
+      connectTimeoutMS: 3000
+    });
     console.log(`MongoDB Connected: ${conn.connection.host}`);
   } catch (error) {
-    console.error(`Error: ${error.message}`);
-    process.exit(1);
+    console.warn(`MongoDB Warning: ${error.message} (Operating in offline/resilient mode)`);
   }
 };
 
@@ -72,8 +87,7 @@ app.get('/', (req, res) => {
 app.use(errorHandler);
 
 // Start server
-connectDB().then(() => {
-  app.listen(PORT, () => {
-    console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
-  });
+app.listen(PORT, () => {
+  console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
+  connectDB();
 });

@@ -1,12 +1,12 @@
 /**
  * TrueView Auth Service – Chrome Extension
- * Connects authentication to existing TrueView Node.js Express server (:5001).
+ * Connects authentication to existing TrueView Node.js Express server (:5000).
  */
 
 import { ExtensionStorage } from '../storage/extension-storage';
 import { UserAuth } from '../types';
 
-const API_BASE_URL = 'http://localhost:5001/api';
+const API_BASE_URL = 'http://localhost:5000/api';
 
 export class AuthService {
   static async login(email: string, pass: string): Promise<{ success: boolean; error?: string; user?: any }> {
