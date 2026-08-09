@@ -393,10 +393,12 @@ const getBiometricStatus = async (req, res, next) => {
 // @access  Public
 const faceLogin = async (req, res, next) => {
   try {
-    const { email, tempLoginToken, image } = req.body;
+    const { email, tempLoginToken, image, frames, challengeType, challengeId } = req.body;
 
-    if (!image) {
-      return res.status(400).json({ message: 'Live face image is required' });
+    const framesPayload = frames && Array.isArray(frames) && frames.length > 0 ? frames : (image ? [image] : []);
+
+    if (framesPayload.length === 0) {
+      return res.status(400).json({ message: 'Live face camera frames are required for verification' });
     }
 
     let user = null;
@@ -429,87 +431,114 @@ const faceLogin = async (req, res, next) => {
 
     const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000';
 
-    // If user and registered face embeddings exist, compare live face against registered embeddings
-    if (user && user.faceEmbeddings && user.faceEmbeddings.length > 0) {
-      const candidates = user.faceEmbeddings.map((emb, idx) => ({
-        id: `${user._id}_${idx}`,
-        embedding: emb
-      }));
-
-      const aiResponse = await axios.post(`${aiUrl}/api/face-recognition/verify`, {
-        image: image,
-        candidates: candidates
+    // ── STEP 1: Multi-Frame Liveness & Presentation Attack Detection (PAD) ──
+    let livenessRes;
+    try {
+      livenessRes = await axios.post(`${aiUrl}/api/liveness/verify-multi-frame`, {
+        frames: framesPayload,
+        challenge_type: challengeType || null,
+        session_id: user ? String(user._id) : 'login_liveness'
       });
-
-      const isVerified = aiResponse.data && aiResponse.data.verified;
-      const confidence = aiResponse.data?.confidence || 0;
-      const matchThreshold = parseFloat(process.env.FACE_MATCH_THRESHOLD || '0.36');
-
-      if (isVerified && confidence >= matchThreshold) {
-        user.faceVerificationAttempts = 0;
-        user.lastFaceVerifiedAt = Date.now();
-        user.lastLogin = Date.now();
-        user.faceVerified = true;
-        try { await user.save({ validateBeforeSave: false }); } catch (e) {}
-
-        const token = generateToken(user._id);
-
-        return res.json({
-          message: 'Face authentication successful! Login complete.',
-          token: token,
-          _id: user._id,
-          fullName: user.fullName,
-          email: user.email,
-          role: user.role,
-          profilePicture: user.profilePicture,
-          confidence: confidence
-        });
-      } else {
-        try {
-          user.faceVerificationAttempts = (user.faceVerificationAttempts || 0) + 1;
-          user.lastFailedFaceVerification = Date.now();
-          await user.save({ validateBeforeSave: false });
-        } catch (e) {}
-
-        return res.status(401).json({ 
-          message: 'The detected face does not match the registered account.',
-          verified: false,
-          confidence
-        });
-      }
+    } catch (aiErr) {
+      console.error('[Auth FAIL CLOSED] AI Liveness service error/unavailable:', aiErr.message);
+      return res.status(503).json({
+        success: false,
+        code: 'LIVENESS_UNAVAILABLE',
+        message: 'Identity verification service could not be completed. Please try again.',
+        verified: false
+      });
     }
 
-    // Fallback: Verify live face extraction via Python AI service for user
-    const extractRes = await axios.post(`${aiUrl}/api/face-recognition/extract-embedding`, {
-      image: image
-    });
+    const livenessData = livenessRes.data || {};
+    const livenessVerified = Boolean(livenessData.livenessVerified === true && livenessData.status === 'LIVE');
 
-    if (extractRes.data && extractRes.data.face_detected) {
-      if (user) {
-        user.faceVerificationAttempts = 0;
-        user.lastFaceVerifiedAt = Date.now();
-        user.lastLogin = Date.now();
-        user.faceVerified = true;
-        try { await user.save({ validateBeforeSave: false }); } catch (e) {}
+    // SECURITY GATE: REJECT IMMEDIATELY IF LIVENESS FAILS OR UNCERTAIN (JWT UNREACHABLE)
+    if (!livenessVerified) {
+      const spoofMessage = livenessData.message || 'Face liveness verification failed. Presentation attack detected.';
+      return res.status(401).json({
+        success: false,
+        code: 'LIVENESS_FAILED',
+        message: spoofMessage,
+        verified: false,
+        livenessFailed: true,
+        spoof_type: livenessData.spoof_type || 'SPOOF'
+      });
+    }
 
-        const token = generateToken(user._id);
-
-        return res.json({
-          message: 'Face authentication successful! Login complete.',
-          token: token,
-          _id: user._id,
-          fullName: user.fullName,
-          email: user.email,
-          role: user.role,
-          profilePicture: user.profilePicture,
-          confidence: 0.95
-        });
-      }
-      return res.status(400).json({ message: 'User account not found' });
-    } else {
-      return res.status(401).json({ 
-        message: 'No face detected in the camera frame. Please position your face clearly.',
+    // ── STEP 2: Registered Face Profile Verification ──
+    if (!user || !user.faceEmbeddings || !Array.isArray(user.faceEmbeddings) || user.faceEmbeddings.length === 0) {
+      return res.status(401).json({
+        success: false,
+        code: 'NO_FACE_PROFILE',
+        message: 'No registered face profile found for this account. Please complete face registration first.',
         verified: false
+      });
+    }
+
+    const primaryFrame = framesPayload[0];
+
+    const candidates = user.faceEmbeddings.map((emb, idx) => ({
+      id: `${user._id}_${idx}`,
+      embedding: emb
+    }));
+
+    let aiResponse;
+    try {
+      aiResponse = await axios.post(`${aiUrl}/api/face-recognition/verify`, {
+        image: primaryFrame,
+        candidates: candidates
+      });
+    } catch (faceErr) {
+      console.error('[Auth FAIL CLOSED] AI Face Recognition service error:', faceErr.message);
+      return res.status(503).json({
+        success: false,
+        code: 'FACE_SERVICE_UNAVAILABLE',
+        message: 'Face recognition service could not be completed. Please try again.',
+        verified: false
+      });
+    }
+
+    const isVerified = aiResponse.data && aiResponse.data.verified;
+    const confidence = aiResponse.data?.confidence || 0;
+    const matchThreshold = parseFloat(process.env.FACE_MATCH_THRESHOLD || '0.48');
+
+    // ── STEP 3: FINAL BACKEND AUTHORIZATION DECISION ──
+    // REQUIRES BOTH: livenessVerified === true AND faceMatchVerified === true
+    if (livenessVerified && isVerified && confidence >= matchThreshold) {
+      user.faceVerificationAttempts = 0;
+      user.lastFaceVerifiedAt = Date.now();
+      user.lastLogin = Date.now();
+      user.faceVerified = true;
+      try { await user.save({ validateBeforeSave: false }); } catch (e) {}
+
+      // JWT is generated ONLY at this single authorized decision point
+      const token = generateToken(user._id);
+
+      return res.json({
+        success: true,
+        message: 'Face authentication successful! Login complete.',
+        token: token,
+        _id: user._id,
+        fullName: user.fullName,
+        email: user.email,
+        role: user.role,
+        profilePicture: user.profilePicture,
+        confidence: confidence,
+        livenessScore: livenessData.liveness_score
+      });
+    } else {
+      try {
+        user.faceVerificationAttempts = (user.faceVerificationAttempts || 0) + 1;
+        user.lastFailedFaceVerification = Date.now();
+        await user.save({ validateBeforeSave: false });
+      } catch (e) {}
+
+      return res.status(401).json({
+        success: false,
+        code: 'FACE_MISMATCH',
+        message: 'Face does not match the registered account.',
+        verified: false,
+        confidence
       });
     }
   } catch (error) {

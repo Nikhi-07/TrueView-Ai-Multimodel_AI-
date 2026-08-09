@@ -80,9 +80,11 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const faceLogin = async ({ email, tempLoginToken, image }) => {
+  const faceLogin = async (payload) => {
     try {
-      const res = await api.post('/auth/face-login', { email, tempLoginToken, image });
+      // Support object payload containing email, tempLoginToken, frames, image, challengeType, challengeId
+      const requestData = typeof payload === 'object' ? payload : { image: payload };
+      const res = await api.post('/auth/face-login', requestData);
       if (res.data && res.data.token) {
         const { token, ...userData } = res.data;
         localStorage.removeItem('trueview_pending_token');

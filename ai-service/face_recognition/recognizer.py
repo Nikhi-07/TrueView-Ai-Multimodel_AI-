@@ -30,8 +30,8 @@ class FaceRecognizer:
         self.recognizer = None
         self._init_recognizer()
 
-        # Threshold for SFace Cosine similarity (typically 0.36 is standard for SFace)
-        self.cosine_threshold = 0.36
+        # Threshold for SFace Cosine similarity (typically 0.36 for loose, 0.48+ for strict verification)
+        self.cosine_threshold = 0.48
 
     def _init_recognizer(self):
         if self.recognizer is not None:
@@ -98,26 +98,21 @@ class FaceRecognizer:
             face = faces_data[0]
             aligned_face = self.recognizer.alignCrop(frame, face)
             
-            # Extract features (embedding)
-            embedding = self.recognizer.feature(aligned_face)
+            # Extract features (embedding) and L2-normalize
+            raw_emb = self.recognizer.feature(aligned_face)
+            norm = np.linalg.norm(raw_emb)
+            if norm > 0:
+                raw_emb = raw_emb / norm
             
-            # SFace produces a 128-D float vector. Let's convert it to a standard Python list.
-            embedding_list = embedding.flatten().tolist()
+            embedding_list = raw_emb.flatten().tolist()
             
             return {
                 "embedding": embedding_list,
                 "face_detected": True
             }
         except Exception as e:
-            print(f"Error extracting embedding via OpenCV: {e}")
-            import hashlib
-            img_hash = hashlib.sha256(image_data.encode('utf-8')).digest()
-            synthetic_emb = [(b / 255.0) * 2 - 1 for b in (img_hash * 4)[:128]]
-            return {
-                "embedding": synthetic_emb,
-                "face_detected": True,
-                "note": f"Fallback embedding used due to processing error: {str(e)}"
-            }
+            print(f"Error extracting embedding via OpenCV SFace: {e}")
+            return {"error": f"Failed to extract face features from image: {str(e)}"}
 
     def verify(self, image_data: str, candidate_embeddings: list):
         """
@@ -129,29 +124,29 @@ class FaceRecognizer:
             return result
             
         live_embedding = np.array(result["embedding"], dtype=np.float32)
-        
+        norm_live = np.linalg.norm(live_embedding)
+        if norm_live > 0:
+            live_embedding = live_embedding / norm_live
+
         best_match = None
         best_score = -1.0
         
         for candidate in candidate_embeddings:
             cand_emb = np.array(candidate["embedding"], dtype=np.float32)
+            norm_cand = np.linalg.norm(cand_emb)
+            if norm_cand > 0:
+                cand_emb = cand_emb / norm_cand
             
             # Compute cosine similarity
-            dot_product = np.dot(live_embedding, cand_emb)
-            norm_live = np.linalg.norm(live_embedding)
-            norm_cand = np.linalg.norm(cand_emb)
-            
-            if norm_live == 0 or norm_cand == 0:
-                continue
-                
-            similarity = dot_product / (norm_live * norm_cand)
+            similarity = float(np.dot(live_embedding, cand_emb))
             
             if similarity > best_score:
-                best_score = float(similarity)
+                best_score = similarity
                 best_match = candidate
                 
-        # Verification passes if similarity is above the threshold
+        # Verification passes if similarity is above strict threshold
         is_matched = best_score >= self.cosine_threshold
+        print(f"[SFace Match] Best similarity = {best_score:.4f}, Threshold = {self.cosine_threshold:.2f}, Verified = {is_matched}")
         
         return {
             "verified": is_matched,
