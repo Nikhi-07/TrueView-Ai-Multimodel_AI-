@@ -38,7 +38,60 @@ const userSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: ['Active', 'Inactive', 'Suspended'],
-      default: 'Active',
+      default: 'Inactive',
+    },
+    registrationStatus: {
+      type: String,
+      enum: ['PENDING_FACE_REGISTRATION', 'PENDING_VOICE_REGISTRATION', 'ACTIVE'],
+      default: 'PENDING_FACE_REGISTRATION',
+    },
+    faceRegistered: {
+      type: Boolean,
+      default: false,
+    },
+    faceVerified: {
+      type: Boolean,
+      default: false,
+    },
+    faceRegisteredAt: {
+      type: Date,
+      default: null,
+    },
+    lastFaceVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+    faceVerificationAttempts: {
+      type: Number,
+      default: 0,
+    },
+    lastFailedFaceVerification: {
+      type: Date,
+      default: null,
+    },
+    voiceRegistered: {
+      type: Boolean,
+      default: false,
+    },
+    voiceVerified: {
+      type: Boolean,
+      default: false,
+    },
+    voiceRegisteredAt: {
+      type: Date,
+      default: null,
+    },
+    lastVoiceVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+    voiceVerificationAttempts: {
+      type: Number,
+      default: 0,
+    },
+    lastFailedVoiceVerification: {
+      type: Date,
+      default: null,
     },
     lastLogin: {
       type: Date,
@@ -47,6 +100,12 @@ const userSchema = new mongoose.Schema(
     faceEmbeddings: {
       type: [[Number]],
       default: [],
+      select: false, // Do not expose face embeddings in normal queries
+    },
+    voiceEmbeddings: {
+      type: [[Number]],
+      default: [],
+      select: false, // Do not expose voice embeddings in normal queries
     },
   },
   {

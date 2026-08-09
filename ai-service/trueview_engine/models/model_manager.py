@@ -58,9 +58,9 @@ class ModelManager:
             self.face_detector = FaceDetector()
             self.landmark_extractor = LandmarkExtractor()
             self.health_status["face_detection"] = "READY"
-            print("[ModelManager] ✅ YuNet Face Detector & Landmark Extractor loaded.")
+            print("[ModelManager] [OK] YuNet Face Detector & Landmark Extractor loaded.")
         except Exception as e:
-            print(f"[ModelManager] ❌ Face Detector failed to load: {e}")
+            print(f"[ModelManager] [ERROR] Face Detector failed to load: {e}")
             self.face_detector = None
             self.landmark_extractor = None
             self.health_status["face_detection"] = "FAILED"
@@ -69,9 +69,9 @@ class ModelManager:
         try:
             self.recognition_service = FaceRecognizer()
             self.health_status["face_recognition"] = "READY"
-            print("[ModelManager] ✅ Face Recognition Service loaded.")
+            print("[ModelManager] [OK] Face Recognition Service loaded.")
         except Exception as e:
-            print(f"[ModelManager] ⚠️ Face Recognition failed to load: {e}")
+            print(f"[ModelManager] [WARN] Face Recognition failed to load: {e}")
             self.recognition_service = None
             self.health_status["face_recognition"] = "FAILED"
 
@@ -79,9 +79,9 @@ class ModelManager:
         try:
             self.liveness_service = LivenessPipeline()
             self.health_status["liveness"] = "READY"
-            print("[ModelManager] ✅ Liveness Detector loaded.")
+            print("[ModelManager] [OK] Liveness Detector loaded.")
         except Exception as e:
-            print(f"[ModelManager] ⚠️ Liveness Detector failed to load: {e}")
+            print(f"[ModelManager] [WARN] Liveness Detector failed to load: {e}")
             self.liveness_service = None
             self.health_status["liveness"] = "FAILED"
 
@@ -89,9 +89,9 @@ class ModelManager:
         try:
             self.gaze_service = EyeGazeService()
             self.health_status["gaze_tracking"] = "READY"
-            print("[ModelManager] ✅ Eye Gaze Tracker loaded.")
+            print("[ModelManager] [OK] Eye Gaze Tracker loaded.")
         except Exception as e:
-            print(f"[ModelManager] ⚠️ Gaze Tracker failed to load: {e}")
+            print(f"[ModelManager] [WARN] Gaze Tracker failed to load: {e}")
             self.gaze_service = None
             self.health_status["gaze_tracking"] = "FAILED"
 
@@ -99,9 +99,9 @@ class ModelManager:
         try:
             self.head_pose_service = HeadPoseService()
             self.health_status["head_pose"] = "READY"
-            print("[ModelManager] ✅ Head Pose Estimator loaded.")
+            print("[ModelManager] [OK] Head Pose Estimator loaded.")
         except Exception as e:
-            print(f"[ModelManager] ⚠️ Head Pose Estimator failed to load: {e}")
+            print(f"[ModelManager] [WARN] Head Pose Estimator failed to load: {e}")
             self.head_pose_service = None
             self.health_status["head_pose"] = "FAILED"
 
@@ -109,9 +109,9 @@ class ModelManager:
         try:
             self.object_detection_service = ObjectDetectionService()
             self.health_status["yolo"] = "READY"
-            print("[ModelManager] ✅ YOLOv11 Object Detector loaded.")
+            print("[ModelManager] [OK] YOLOv11 Object Detector loaded.")
         except Exception as e:
-            print(f"[ModelManager] ⚠️ YOLO Object Detector failed to load: {e}")
+            print(f"[ModelManager] [WARN] YOLO Object Detector failed to load: {e}")
             self.object_detection_service = None
             self.health_status["yolo"] = "FAILED"
 
@@ -119,14 +119,14 @@ class ModelManager:
         try:
             self.vad_service = VoiceService()
             self.health_status["voice_vad"] = "READY"
-            print("[ModelManager] ✅ Voice VAD Service loaded.")
+            print("[ModelManager] [OK] Voice VAD Service loaded.")
         except Exception as e:
-            print(f"[ModelManager] ⚠️ Voice VAD Service failed to load: {e}")
+            print(f"[ModelManager] [WARN] Voice VAD Service failed to load: {e}")
             self.vad_service = None
             self.health_status["voice_vad"] = "FAILED"
 
         self._initialized = True
-        print("[ModelManager] 🎉 All models initialized successfully!")
+        print("[ModelManager] [OK] All models initialized successfully!")
 
     def _detect_device(self) -> str:
         """Detect best available hardware accelerator."""

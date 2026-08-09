@@ -98,7 +98,7 @@ class TrueViewEngine:
 
         self._last_yolo_result: Dict[str, Any] = {"summary": {"person_count": 1, "phone_detected": False}, "detections": []}
         self._initialized = True
-        print("[TrueViewEngine] ✅ TrueView Intelligence Engine Ready!")
+        print("[TrueViewEngine] [OK] TrueView Intelligence Engine Ready!")
 
     def process_frame(self, payload: UnifiedMonitoringInput) -> UnifiedMonitoringOutput:
         """

@@ -2,7 +2,7 @@ import { cn } from '../../utils/helpers';
 import { Circle, AlertCircle, Info, CheckCircle2 } from 'lucide-react';
 
 export default function Timeline({ items = [], className }) {
-  if (!items.length) return <div className="text-sm font-semibold text-black p-4">No recent activity.</div>;
+  if (!items?.length) return <div className="text-sm font-semibold text-black p-4">No recent activity.</div>;
 
   const iconMap = {
     danger: <AlertCircle size={14} className="text-rose-700" />,

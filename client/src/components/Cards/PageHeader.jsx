@@ -4,7 +4,7 @@ export default function PageHeader({ title, subtitle, breadcrumb = [], actions, 
   return (
     <div className={cn('mb-6', className)}>
       {/* Breadcrumb */}
-      {breadcrumb.length > 0 && (
+      {breadcrumb?.length > 0 && (
         <div className="flex items-center gap-1.5 mb-1.5">
           {breadcrumb.map((item, i) => (
             <span key={i} className="flex items-center gap-1.5">

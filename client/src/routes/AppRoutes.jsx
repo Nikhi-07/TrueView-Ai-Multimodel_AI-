@@ -31,6 +31,8 @@ import BehaviourAnalysisViewer from '../pages/BehaviourAnalysisViewer';
 import DecisionEngineViewer from '../pages/DecisionEngineViewer';
 import RoomManager from '../pages/RoomManager';
 
+import VoiceRegistration from '../pages/VoiceRegistration';
+
 export default function AppRoutes() {
   const { isAuthenticated } = useAuth();
 
@@ -42,6 +44,8 @@ export default function AppRoutes() {
           {/* Redirect to dashboard if already logged in */}
           <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : <Login />} />
           <Route path="/register" element={isAuthenticated ? <Navigate to="/face-registration" /> : <Register />} />
+          <Route path="/register-face" element={<FaceRegistration />} />
+          <Route path="/register-voice" element={<VoiceRegistration />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
         </Route>

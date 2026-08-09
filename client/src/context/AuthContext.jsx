@@ -2,11 +2,32 @@ import { createContext, useContext, useState, useEffect } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 
-const AuthContext = createContext(null);
+const defaultAuthContext = {
+  user: null,
+  isAuthenticated: false,
+  pendingToken: null,
+  pendingVoiceToken: null,
+  loading: true,
+  login: async () => {},
+  verifyCredentials: async () => {},
+  faceLogin: async () => {},
+  voiceLogin: async () => {},
+  register: async () => {},
+  completeFaceRegistration: async () => {},
+  completeVoiceRegistration: async () => {},
+  logout: () => {},
+  forgotPassword: async () => {},
+  resetPassword: async () => {},
+  updateProfile: async () => {}
+};
+
+const AuthContext = createContext(defaultAuthContext);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [pendingToken, setPendingToken] = useState(localStorage.getItem('trueview_pending_token') || null);
+  const [pendingVoiceToken, setPendingVoiceToken] = useState(localStorage.getItem('trueview_pending_voice_token') || null);
   const [loading, setLoading] = useState(true);
 
   // Initialize auth state from local storage on load
@@ -17,8 +38,12 @@ export function AuthProvider({ children }) {
         try {
           // Verify token by fetching user profile
           const res = await api.get('/users/profile');
-          setUser(res.data);
-          setIsAuthenticated(true);
+          if (res.data.registrationStatus === 'PENDING_FACE_REGISTRATION' || res.data.registrationStatus === 'PENDING_VOICE_REGISTRATION') {
+            logout();
+          } else {
+            setUser(res.data);
+            setIsAuthenticated(true);
+          }
         } catch (error) {
           console.error('Auth initialization failed', error);
           logout(); // Clear invalid token
@@ -31,25 +56,22 @@ export function AuthProvider({ children }) {
   }, []);
 
   const login = async (email, password) => {
-    try {
-      const res = await api.post('/auth/login', { email, password });
-      const { token, ...userData } = res.data;
-      
-      localStorage.setItem('trueview_token', token);
-      setUser(userData);
-      setIsAuthenticated(true);
-      toast.success('Logged in successfully');
-      return true;
-    } catch (error) {
-      const msg = error.response?.data?.message || 'Login failed';
-      toast.error(msg);
-      throw new Error(msg);
-    }
+    return verifyCredentials(email, password);
   };
 
   const verifyCredentials = async (email, password) => {
     try {
       const res = await api.post('/auth/verify-credentials', { email, password });
+      if (res.data.isPendingRegistration) {
+        if (res.data.pendingVoiceToken) {
+          localStorage.setItem('trueview_pending_voice_token', res.data.pendingVoiceToken);
+          setPendingVoiceToken(res.data.pendingVoiceToken);
+        }
+        if (res.data.pendingToken) {
+          localStorage.setItem('trueview_pending_token', res.data.pendingToken);
+          setPendingToken(res.data.pendingToken);
+        }
+      }
       return res.data;
     } catch (error) {
       const msg = error.response?.data?.message || 'Verification failed';
@@ -58,18 +80,46 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const faceLogin = async (email, image) => {
+  const faceLogin = async ({ email, tempLoginToken, image }) => {
     try {
-      const res = await api.post('/auth/face-login', { email, image });
+      const res = await api.post('/auth/face-login', { email, tempLoginToken, image });
+      if (res.data && res.data.token) {
+        const { token, ...userData } = res.data;
+        localStorage.removeItem('trueview_pending_token');
+        localStorage.removeItem('trueview_pending_voice_token');
+        setPendingToken(null);
+        setPendingVoiceToken(null);
+        localStorage.setItem('trueview_token', token);
+        setUser(userData);
+        setIsAuthenticated(true);
+        toast.success('✓ Face Verified - Login Successful!');
+      } else {
+        toast.success('Face Verified successfully!');
+      }
+      return res.data;
+    } catch (error) {
+      const msg = error.response?.data?.message || 'Face authentication failed';
+      toast.error(msg);
+      throw new Error(msg);
+    }
+  };
+
+  const voiceLogin = async ({ email, tempVoiceToken, audio }) => {
+    try {
+      const res = await api.post('/auth/voice-login', { email, tempVoiceToken, audio });
       const { token, ...userData } = res.data;
       
+      localStorage.removeItem('trueview_pending_token');
+      localStorage.removeItem('trueview_pending_voice_token');
+      setPendingToken(null);
+      setPendingVoiceToken(null);
       localStorage.setItem('trueview_token', token);
       setUser(userData);
       setIsAuthenticated(true);
-      toast.success('Face login successful');
-      return true;
+      toast.success('✓ Voice Verified - Authentication Complete!');
+      return res.data;
     } catch (error) {
-      const msg = error.response?.data?.message || 'Face login failed';
+      const msg = error.response?.data?.message || 'Voice verification failed';
       toast.error(msg);
       throw new Error(msg);
     }
@@ -78,13 +128,12 @@ export function AuthProvider({ children }) {
   const register = async (userData) => {
     try {
       const res = await api.post('/auth/register', userData);
-      const { token, ...newUserData } = res.data;
-      
-      localStorage.setItem('trueview_token', token);
-      setUser(newUserData);
-      setIsAuthenticated(true);
-      toast.success('Registration successful');
-      return true;
+      if (res.data.pendingToken) {
+        localStorage.setItem('trueview_pending_token', res.data.pendingToken);
+        setPendingToken(res.data.pendingToken);
+      }
+      toast.success('Details submitted! Mandatory face registration required.');
+      return res.data;
     } catch (error) {
       const msg = error.response?.data?.message || 'Registration failed';
       toast.error(msg);
@@ -92,18 +141,64 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const completeFaceRegistration = async (embeddings) => {
+    try {
+      const pToken = pendingToken || localStorage.getItem('trueview_pending_token');
+      const headers = pToken ? { Authorization: `Bearer ${pToken}` } : {};
+      
+      const res = await api.post('/auth/register-face', { embeddings }, { headers });
+      if (res.data.pendingVoiceToken) {
+        localStorage.setItem('trueview_pending_voice_token', res.data.pendingVoiceToken);
+        setPendingVoiceToken(res.data.pendingVoiceToken);
+      }
+      toast.success('Face profile saved! Please complete mandatory voice registration.');
+      return res.data;
+    } catch (error) {
+      const msg = error.response?.data?.message || 'Failed to register face profile.';
+      toast.error(msg);
+      throw new Error(msg);
+    }
+  };
+
+  const completeVoiceRegistration = async (audioData) => {
+    try {
+      const pVoiceToken = pendingVoiceToken || localStorage.getItem('trueview_pending_voice_token') || pendingToken || localStorage.getItem('trueview_pending_token');
+      const headers = pVoiceToken ? { Authorization: `Bearer ${pVoiceToken}` } : {};
+      
+      const res = await api.post('/auth/register-voice', { audio: audioData }, { headers });
+      const { token, ...userData } = res.data;
+      
+      localStorage.removeItem('trueview_pending_token');
+      localStorage.removeItem('trueview_pending_voice_token');
+      setPendingToken(null);
+      setPendingVoiceToken(null);
+      localStorage.setItem('trueview_token', token);
+      setUser(userData);
+      setIsAuthenticated(true);
+      toast.success('Voice profile saved & account fully activated!');
+      return res.data;
+    } catch (error) {
+      const msg = error.response?.data?.message || 'Failed to register voice profile.';
+      toast.error(msg);
+      throw new Error(msg);
+    }
+  };
+
   const logout = () => {
     localStorage.removeItem('trueview_token');
+    localStorage.removeItem('trueview_pending_token');
+    localStorage.removeItem('trueview_pending_voice_token');
+    setPendingToken(null);
+    setPendingVoiceToken(null);
     setUser(null);
     setIsAuthenticated(false);
-    toast.success('Logged out');
   };
 
   const forgotPassword = async (email) => {
     try {
       const res = await api.post('/auth/forgot-password', { email });
       toast.success(res.data.message || 'Reset link sent');
-      return res.data; // Includes the fake reset token for development testing
+      return res.data;
     } catch (error) {
       const msg = error.response?.data?.message || 'Failed to send reset link';
       toast.error(msg);
@@ -140,25 +235,29 @@ export function AuthProvider({ children }) {
     <AuthContext.Provider value={{ 
       user, 
       isAuthenticated, 
+      pendingToken,
+      pendingVoiceToken,
       loading, 
       login, 
       verifyCredentials,
       faceLogin,
+      voiceLogin,
       register, 
+      completeFaceRegistration,
+      completeVoiceRegistration,
       logout, 
       forgotPassword, 
       resetPassword,
       updateProfile 
     }}>
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 }
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within AuthProvider');
-  return context;
+  return context || defaultAuthContext;
 }
 
 export default AuthContext;
