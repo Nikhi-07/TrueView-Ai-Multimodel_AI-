@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { 
-  Video, Users, Plus, Shield, Square, AlertTriangle, Volume2, Copy, Search, RefreshCw, PhoneOff
+  Video, Users, Plus, Shield, Square, AlertTriangle, Volume2, Copy, Search, RefreshCw, PhoneOff, FileText
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PageHeader from '../components/Cards/PageHeader';
@@ -16,6 +18,8 @@ const MODES = [
 ];
 
 export default function RoomManager() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const [rooms, setRooms] = useState([]);
   const [activeRoom, setActiveRoom] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -79,8 +83,8 @@ export default function RoomManager() {
   };
 
   const copyRoomLink = (roomId) => {
-    navigator.clipboard.writeText(`${window.location.origin}/session/${roomId}/verify`);
-    showNotification(`Room link ${roomId} copied to clipboard!`);
+    navigator.clipboard.writeText(`${window.location.origin}/proctor-room/${roomId}`);
+    showNotification(`Participant invite link ${roomId} copied to clipboard!`);
   };
 
   const triggerLivenessChallenge = (candidateName) => {
@@ -337,21 +341,45 @@ export default function RoomManager() {
                     <span className="badge-success">{room.status}</span>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-col space-y-2">
                     <button
-                      onClick={() => setActiveRoom(room)}
-                      className="btn-primary flex-1 py-2 text-xs flex items-center justify-center gap-2 font-semibold"
+                      onClick={() => navigate(`/proctor-room/${room.id}`)}
+                      className="btn-primary w-full py-2 text-xs flex items-center justify-center gap-2 font-bold bg-black text-white hover:bg-zinc-800 shadow-sm"
                     >
                       <Video size={14} />
-                      Enter Host Dashboard
+                      Join Monitored Session
                     </button>
-                    <button
-                      onClick={() => copyRoomLink(room.id)}
-                      className="btn-ghost py-2 px-3 text-xs"
-                      title="Copy Invite Link"
-                    >
-                      <Copy size={14} />
-                    </button>
+
+                    {/* Host & Reviewer Admin Controls (Only visible to Host/Admin) */}
+                    {(user?.role === 'admin' || user?.role === 'host' || room.host?.includes(user?.name || 'You')) && (
+                      <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
+                        <button
+                          onClick={() => navigate(`/proctor-room/${room.id}?role=reviewer`)}
+                          className="flex-1 py-1.5 px-2.5 text-xs flex items-center justify-center gap-1.5 font-bold bg-zinc-100 hover:bg-zinc-200 border border-zinc-300 text-zinc-900 rounded-lg transition"
+                          title="Launch Host Proctoring Dashboard"
+                        >
+                          <Shield size={13} className="text-emerald-600" />
+                          <span>Host Dashboard</span>
+                        </button>
+
+                        <button
+                          onClick={() => navigate('/reports')}
+                          className="py-1.5 px-2.5 text-xs flex items-center justify-center gap-1 font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg transition"
+                          title="View Proctoring Reports"
+                        >
+                          <FileText size={13} />
+                          <span>Reports</span>
+                        </button>
+
+                        <button
+                          onClick={() => copyRoomLink(room.id)}
+                          className="py-1.5 px-2.5 text-xs flex items-center justify-center gap-1 font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg transition"
+                          title="Copy Participant Invite Link"
+                        >
+                          <Copy size={13} />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

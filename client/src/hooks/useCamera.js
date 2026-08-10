@@ -24,23 +24,9 @@ export default function useCamera() {
     }
   }, [selectedDeviceId]);
 
-  // Request permission on mount (one-time)
-  useEffect(() => {
-    let cancelled = false;
-    navigator.mediaDevices.getUserMedia({ video: true })
-      .then(s => {
-        s.getTracks().forEach(t => t.stop()); // release immediately
-        if (!cancelled) {
-          setPermissionGranted(true);
-          getDevices();
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setError('Camera permission denied or no camera found.');
-      });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // NOTE: Camera permission is only requested when startCamera() is explicitly
+  // called by the user-facing flow (face registration / login face step).
+  // This hook never silently requests camera access on mount.
 
   const startCamera = useCallback(async (deviceId) => {
     // Stop any existing stream first
@@ -60,7 +46,9 @@ export default function useCamera() {
       const newStream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = newStream;
       setIsActive(true);
+      setPermissionGranted(true);
       setError(null);
+      getDevices();
 
       if (videoRef.current) {
         videoRef.current.srcObject = newStream;

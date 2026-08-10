@@ -21,11 +21,16 @@ class QualityStatus(BaseModel):
 
 
 class IdentityStatus(BaseModel):
-    verified: bool = True
-    status: str = "IDENTITY_CONSISTENT" # IDENTITY_CONSISTENT | IDENTITY_UNCERTAIN | IDENTITY_MISMATCH | POSSIBLE_USER_REPLACEMENT
-    confidence: float = 0.95
+    # Honest defaults: nothing is verified until a REAL recognition result exists.
+    verified: bool = False
+    status: str = "IDENTITY_UNCERTAIN" # IDENTITY_CONSISTENT | IDENTITY_UNCERTAIN | IDENTITY_MISMATCH | POSSIBLE_USER_REPLACEMENT
+    confidence: float = 0.0
     user_id: Optional[str] = None
     last_verified_ts: Optional[str] = None
+    # True when recognition could not run (model missing / no registered profile).
+    # Consumers must never show REGISTERED_FACE / IDENTITY_MISMATCH in this state.
+    recognition_unavailable: bool = False
+    note: Optional[str] = None
 
 
 class LivenessStatus(BaseModel):
@@ -115,10 +120,13 @@ class PerformanceMetrics(BaseModel):
     fps: float = 0.0
     latency_ms: float = 0.0
     mode: str = "NORMAL"               # NORMAL | SUSPICIOUS | LOW_POWER
+    # Per-stage inference timings (ms) for the real-time performance panel.
+    latency_breakdown: Dict[str, float] = {}   # decode, quality, perception, yolo, fusion, confirmation, correlation, decision, explanation
 
 
 class ModuleHealthStatus(BaseModel):
     face_detection: str = "READY"      # READY | DEGRADED | FAILED | DISABLED
+    face_recognition: str = "FAILED"   # HONEST: FAILED until the SFace model is actually loaded
     liveness: str = "READY"
     gaze_tracking: str = "READY"
     head_pose: str = "READY"
@@ -133,6 +141,11 @@ class UnifiedMonitoringOutput(BaseModel):
     session_id: str
     timestamp: str
     status: str = "MONITORING"          # INITIALIZING | CALIBRATING | MONITORING | DEGRADED | COMPLETED
+
+    # Real-time latency instrumentation (unix epoch seconds).
+    inference_start_timestamp: Optional[float] = None
+    inference_end_timestamp: Optional[float] = None
+    event_generated_timestamp: Optional[float] = None
 
     quality: QualityStatus
     identity: IdentityStatus

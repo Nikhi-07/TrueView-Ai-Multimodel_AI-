@@ -30,7 +30,8 @@ class AttentionIntelligenceEngine:
         calibrated_pose_deltas: Dict[str, float],
         face_detected: bool,
         quality_eval: Dict[str, Any],
-        looking_away_duration: float
+        looking_away_duration: float,
+        session_type: str = "EXAM"
     ) -> Dict[str, Any]:
         """
         Produce comprehensive attention status payload.
@@ -61,9 +62,15 @@ class AttentionIntelligenceEngine:
         is_gaze_away = (gaze_dir not in ("center", "straight"))
         is_pose_deviated = (yaw_delta > 16.0 or pitch_delta > 14.0 or pose_dir != "Looking Straight")
 
-        # Special Keyboard Typing Check: candidate looking down at keyboard with head centered
+        # Keyboard Typing Check: candidate looking down at keyboard with head centered.
+        # This exemption exists so CLASS / MEETING / WORKPLACE sessions don't false-
+        # alarm on legitimate typing. It is NOT applied in EXAM mode: looking down at
+        # the desk/lap is exactly the signal proctors must see (hidden phone, notes),
+        # so EXAM treats a downward glance as an OFFSCREEN_GLANCE like any other
+        # distraction. The 2-frame + temporal confirmation window still filters noise.
         is_downward_keyboard_glance = (
-            (gaze_dir in ("down", "bottom") or raw_pitch < -6.0)
+            session_type.upper() != "EXAM"
+            and (gaze_dir in ("down", "bottom") or raw_pitch < -6.0)
             and yaw_delta < 15.0  # Head is NOT turned sideways left/right
             and looking_away_duration <= 2.5  # Brief keyboard typing glance
         )

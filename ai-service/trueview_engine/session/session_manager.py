@@ -22,10 +22,14 @@ class SessionState:
 class SessionInstance:
     """Represents an active proctoring session."""
 
-    def __init__(self, session_id: str, user_id: str = "candidate_01", session_type: str = "EXAM"):
+    def __init__(self, session_id: str, user_id: str = "candidate_01", session_type: str = "EXAM",
+                 registered_face_embeddings=None):
         self.session_id = session_id
         self.user_id = user_id
         self.session_type = session_type
+        # Registered 128-D face embedding(s) supplied by the backend at session start.
+        # Used ONLY for real SFace recognition; empty means recognition is unavailable.
+        self.registered_face_embeddings = registered_face_embeddings or []
         self.state = SessionState.CREATED
         self.start_time = time.time()
         self.frame_count = 0
@@ -53,9 +57,10 @@ class SessionManager:
             cls._instance._sessions: Dict[str, SessionInstance] = {}
         return cls._instance
 
-    def get_or_create(self, session_id: str, user_id: str = "candidate_01", session_type: str = "EXAM") -> SessionInstance:
+    def get_or_create(self, session_id: str, user_id: str = "candidate_01", session_type: str = "EXAM",
+                      registered_face_embeddings=None) -> SessionInstance:
         if session_id not in self._sessions:
-            sess = SessionInstance(session_id, user_id, session_type)
+            sess = SessionInstance(session_id, user_id, session_type, registered_face_embeddings)
             sess.state = SessionState.MONITORING
             self._sessions[session_id] = sess
         return self._sessions[session_id]
@@ -67,3 +72,27 @@ class SessionManager:
     def remove(self, session_id: str):
         if session_id in self._sessions:
             del self._sessions[session_id]
+
+    def queue_lengths(self) -> Dict[str, Any]:
+        """
+        Real-time queue / pipeline health snapshot for the performance panel.
+
+        The AI service processes ONE frame at a time (clients drop stale frames
+        while a request is in flight), so the effective request queue is 0-1.
+        Returns per-session telemetry so the panel can detect a backed-up pipe.
+        """
+        sessions = []
+        now = time.time()
+        for sid, sess in self._sessions.items():
+            sessions.append({
+                "session_id": sid,
+                "frame_count": sess.frame_count,
+                "fps": sess.fps,
+                "state": sess.state,
+                "age_seconds": round(now - sess.start_time, 1),
+            })
+        return {
+            "active_sessions": len(self._sessions),
+            "request_queue_depth": 0,  # stateless: one request at a time by design
+            "sessions": sessions,
+        }

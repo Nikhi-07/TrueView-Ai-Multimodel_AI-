@@ -1,0 +1,103 @@
+{
+  "results": [
+    {
+      "level": 1,
+      "sessions_attempted": 1,
+      "sessions_connected": 1,
+      "connect_mean_ms": 8,
+      "connect_p95_ms": 8,
+      "join_mean_ms": 1,
+      "join_p95_ms": 1,
+      "ai_event_rtt_mean_ms": 2,
+      "ai_event_rtt_p95_ms": 2,
+      "events_fired": 3,
+      "event_failures": 0,
+      "total_wall_ms": 25,
+      "failures": {
+        "connect": 0,
+        "join": 0,
+        "event": 0
+      }
+    },
+    {
+      "level": 5,
+      "sessions_attempted": 5,
+      "sessions_connected": 5,
+      "connect_mean_ms": 2,
+      "connect_p95_ms": 4,
+      "join_mean_ms": 1,
+      "join_p95_ms": 1,
+      "ai_event_rtt_mean_ms": 1,
+      "ai_event_rtt_p95_ms": 2,
+      "events_fired": 15,
+      "event_failures": 0,
+      "total_wall_ms": 46,
+      "failures": {
+        "connect": 0,
+        "join": 0,
+        "event": 0
+      }
+    },
+    {
+      "level": 10,
+      "sessions_attempted": 10,
+      "sessions_connected": 10,
+      "connect_mean_ms": 2,
+      "connect_p95_ms": 7,
+      "join_mean_ms": 1,
+      "join_p95_ms": 2,
+      "ai_event_rtt_mean_ms": 1,
+      "ai_event_rtt_p95_ms": 2,
+      "events_fired": 30,
+      "event_failures": 0,
+      "total_wall_ms": 93,
+      "failures": {
+        "connect": 0,
+        "join": 0,
+        "event": 0
+      }
+    },
+    {
+      "level": 25,
+      "sessions_attempted": 25,
+      "sessions_connected": 25,
+      "connect_mean_ms": 2,
+      "connect_p95_ms": 2,
+      "join_mean_ms": 1,
+      "join_p95_ms": 2,
+      "ai_event_rtt_mean_ms": 1,
+      "ai_event_rtt_p95_ms": 2,
+      "events_fired": 75,
+      "event_failures": 0,
+      "total_wall_ms": 257,
+      "failures": {
+        "connect": 0,
+        "join": 0,
+        "event": 0
+      }
+    },
+    {
+      "level": 50,
+      "sessions_attempted": 50,
+      "sessions_connected": 50,
+      "connect_mean_ms": 2,
+      "connect_p95_ms": 3,
+      "join_mean_ms": 1,
+      "join_p95_ms": 1,
+      "ai_event_rtt_mean_ms": 1,
+      "ai_event_rtt_p95_ms": 2,
+      "events_fired": 150,
+      "event_failures": 0,
+      "total_wall_ms": 360,
+      "failures": {
+        "connect": 0,
+        "join": 0,
+        "event": 0
+      }
+    }
+  ],
+  "cleanup": {
+    "sessions": 16,
+    "alerts": 88
+  }
+}

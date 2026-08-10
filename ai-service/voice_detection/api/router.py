@@ -7,11 +7,11 @@ Exposes FastAPI endpoints for real-time voice activity detection (VAD) and speec
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from voice_detection.services.voice_service import VoiceService
-from voice_detection.speaker_recognition.speaker_recognizer import SpeakerRecognizer
+from voice_detection.speaker_recognition.voice_identity_engine import VoiceIdentityEngine
 
 router = APIRouter()
 voice_service = VoiceService()
-speaker_recognizer = SpeakerRecognizer()
+voice_identity = VoiceIdentityEngine()
 
 class AudioProcessRequest(BaseModel):
     """Schema for frame processing request."""
@@ -55,16 +55,23 @@ async def reset_voice_session(request: ResetSessionRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to reset session: {str(e)}")
 
+@router.get("/active-model")
+async def active_model():
+    """
+    Report which speaker-verification backend is active (ECAPA-TDNN or custom acoustic vector).
+    """
+    return voice_identity.get_active_model()
+
 @router.post("/extract-embedding")
 async def extract_embedding(request: ExtractSpeakerEmbeddingRequest):
     """
-    Extract 128-D speaker embedding vector from base64 audio.
+    Extract a speaker embedding vector (ECAPA-TDNN 192-D when available, else 128-D custom acoustic vector) from base64 audio.
     """
     try:
         if not request.audio:
             raise HTTPException(status_code=400, detail="Audio base64 payload is required")
 
-        result = speaker_recognizer.extract_speaker_embedding(request.audio)
+        result = voice_identity.extract_speaker_embedding(request.audio)
         return result
     except Exception as e:
         print(f"[SpeakerRec] Error extracting speaker embedding: {e}")
@@ -79,9 +86,30 @@ async def verify_speaker(request: VerifySpeakerRequest):
         if not request.audio or not request.candidate:
             raise HTTPException(status_code=400, detail="Audio and candidate embedding are required")
 
-        result = speaker_recognizer.verify_speaker(request.audio, request.candidate, request.threshold)
+        result = voice_identity.verify_speaker(request.audio, request.candidate, request.threshold)
         return result
     except Exception as e:
         print(f"[SpeakerRec] Error verifying speaker: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to verify speaker: {str(e)}")
+
+class AnalyzeAudioRequest(BaseModel):
+    """Schema for multi-speaker analysis of a live audio sample."""
+    audio: str  # Base64 encoded audio (WAV data URL preferred)
+    min_window_ms: int = 800
+
+@router.post("/analyze-audio")
+async def analyze_audio(request: AnalyzeAudioRequest):
+    """
+    Segment a live audio sample and report whether multiple distinct speakers
+    are present (evidence-based; never an accusation).
+    """
+    try:
+        if not request.audio:
+            raise HTTPException(status_code=400, detail="Audio payload is required")
+
+        result = voice_identity.analyze_speakers(request.audio, min_window_ms=request.min_window_ms)
+        return result
+    except Exception as e:
+        print(f"[SpeakerRec] Error analyzing audio: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze audio: {str(e)}")
 

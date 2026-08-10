@@ -4,6 +4,7 @@ import { LogIn, Eye, EyeOff, ScanFace, ArrowLeft, RefreshCw, CheckCircle, Shield
 import { useAuth } from '../context/AuthContext';
 import LoadingSpinner from '../components/Loading/LoadingSpinner';
 import useCamera from '../hooks/useCamera';
+import useFaceLandmarker from '../hooks/useFaceLandmarker';
 import toast from 'react-hot-toast';
 
 export default function Login() {
@@ -23,6 +24,13 @@ export default function Login() {
   const navigate = useNavigate();
   
   const { videoRef, isActive, startCamera, stopCamera, captureFrameBase64 } = useCamera();
+
+  // Real MediaPipe Face Landmarker blendshape blink detection (tilt-independent)
+  const [blinkCount, setBlinkCount] = useState(0);
+  const landmarker = useFaceLandmarker(videoRef, {
+    enabled: step === 'face',
+    onBlink: (count) => setBlinkCount(count)
+  });
 
   // Control camera and liveness challenge based on active step
   useEffect(() => {
@@ -101,10 +109,16 @@ export default function Login() {
     try {
       // Capture a 6-frame temporal sequence over 1.5 seconds for multi-frame PAD analysis
       const frames = [];
+      const eyeBlinkLeft = [];
+      const eyeBlinkRight = [];
       for (let i = 0; i < 6; i++) {
         const frame = captureFrameBase64();
         if (frame) {
           frames.push(frame);
+          // Real MediaPipe blendshapes (eyeBlinkLeft / eyeBlinkRight)
+          const bs = landmarker.getBlendshapes();
+          eyeBlinkLeft.push(bs.left);
+          eyeBlinkRight.push(bs.right);
         }
         await new Promise((resolve) => setTimeout(resolve, 250)); // 250ms interval between frames
       }
@@ -119,7 +133,9 @@ export default function Login() {
         frames,
         image: frames[0],
         challengeType: challenge?.challenge_type,
-        challengeId: challenge?.challenge_id
+        challengeId: challenge?.challenge_id,
+        eyeBlinkLeft,
+        eyeBlinkRight
       });
 
       if (res && res.token) {
@@ -242,16 +258,16 @@ export default function Login() {
                  <span>Face Detected ✓</span>
                </div>
                <div className="flex items-center gap-1.5">
-                 <CheckCircle size={13} className="text-green-600" />
-                 <span>Single Face ✓</span>
-               </div>
-               <div className="flex items-center gap-1.5">
                  <ShieldCheck size={13} className="text-green-600" />
-                 <span>Multi-Frame PAD ✓</span>
+                 <span>MiniFASNet PAD ✓</span>
                </div>
                <div className="flex items-center gap-1.5">
-                 <Sparkles size={13} className="text-green-600" />
-                 <span>Anti-Spoof Check</span>
+                 <Sparkles size={13} className={landmarker.status === 'ready' ? 'text-green-600' : 'text-gray-400'} />
+                 <span>MediaPipe Blendshapes {landmarker.status === 'ready' ? '✓' : '(loading…)'}</span>
+               </div>
+               <div className="flex items-center gap-1.5">
+                 <Eye size={13} className="text-green-600" />
+                 <span>Blink: {blinkCount}</span>
                </div>
              </div>
           </div>

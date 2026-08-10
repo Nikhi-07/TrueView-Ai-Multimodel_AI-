@@ -10,27 +10,19 @@ export default function LiveVerification() {
   const navigate = useNavigate();
   const { id } = useParams(); // Get session ID from URL
   const { videoRef, isActive, error: camError, startCamera, stopCamera, captureFrameBase64 } = useCamera();
-  
-  const [candidates, setCandidates] = useState([]);
+
   const [userProfile, setUserProfile] = useState(null);
   const [verificationStatus, setVerificationStatus] = useState('idle'); // idle, loading, success, failed, no_profile
   const [confidence, setConfidence] = useState(0);
-  const [processingTime, setProcessingTime] = useState(0);
-  const requestRef = useRef(null);
 
-  // Load embeddings from backend
+  // Load biometric readiness from the backend.
+  // Biometric embeddings stay server-side: only registration status is exposed.
   useEffect(() => {
-    const fetchEmbeddings = async () => {
+    const fetchProfile = async () => {
       try {
         const res = await api.get('/auth/face-embeddings');
         setUserProfile({ id: res.data.id, name: res.data.fullName });
-        if (res.data.embeddings && res.data.embeddings.length > 0) {
-          // Format as required by FastAPI candidates
-          const formatted = res.data.embeddings.map((emb, index) => ({
-             id: `${res.data.id}_${index}`,
-             embedding: emb
-          }));
-          setCandidates(formatted);
+        if (res.data.faceRegistered && res.data.embeddingsCount > 0) {
           startCamera();
         } else {
           setVerificationStatus('no_profile');
@@ -40,15 +32,17 @@ export default function LiveVerification() {
         navigate('/face-registration');
       }
     };
-    fetchEmbeddings();
+    fetchProfile();
     return () => {
       stopCamera();
-      if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
   }, [navigate, startCamera, stopCamera]);
 
+  // SERVER-AUTHORITATIVE verification: the backend matches the live frame
+  // against the stored embeddings and returns the final decision. The client
+  // never receives or handles raw embeddings.
   const runVerification = useCallback(async () => {
-    if (!isActive || candidates.length === 0) return;
+    if (!isActive) return;
 
     setVerificationStatus('loading');
     const frame = captureFrameBase64();
@@ -58,28 +52,12 @@ export default function LiveVerification() {
     }
 
     try {
-      const response = await fetch('/ai-api/face-recognition/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image: frame,
-          candidates: candidates
-        })
-      });
-      
-      const result = await response.json();
-      
-      if (!response.ok) {
-        toast.error(result.detail || result.error || 'Verification error');
-        throw new Error(result.detail || result.error || 'Verification error');
-      }
+      const response = await api.post('/auth/verify-session-face', { image: frame });
+      setConfidence((response.data.confidence || 0) * 100);
 
-      setConfidence(result.confidence * 100);
-      
-      if (result.verified) {
+      if (response.data.verified) {
         setVerificationStatus('success');
         toast.success('Identity Verified Successfully!');
-        // Redirect to session room after a delay
         setTimeout(() => {
           if (id) {
             navigate(`/session/${id}/monitor`);
@@ -94,18 +72,17 @@ export default function LiveVerification() {
       console.error(err);
       setVerificationStatus('failed');
     }
-  }, [isActive, candidates, captureFrameBase64, navigate, id]);
+  }, [isActive, captureFrameBase64, navigate, id]);
 
   // Run automatically when camera starts
   useEffect(() => {
-    if (isActive && candidates.length > 0 && verificationStatus === 'idle') {
-      // Trigger verify after a short delay to allow camera exposure to adjust
+    if (isActive && verificationStatus === 'idle') {
       const timer = setTimeout(() => {
-         runVerification();
+        runVerification();
       }, 1000);
       return () => clearTimeout(timer);
     }
-  }, [isActive, candidates, verificationStatus, runVerification]);
+  }, [isActive, verificationStatus, runVerification]);
 
   return (
     <div className="max-w-md mx-auto space-y-6">
@@ -173,7 +150,7 @@ export default function LiveVerification() {
               <h3 className="text-base font-bold text-gray-200">Verification Failed</h3>
               <p className="text-xs text-gray-500 mt-1">No matches found or face not clearly visible.</p>
             </div>
-            <div className="bg-danger-500/5 border border-danger-500/10 p-3 rounded-xl flex justify-between items-center mb-2">
+            <div className="bg-success-500/5 border border-success-500/10 p-3 rounded-xl flex justify-between items-center mb-2">
                <span className="text-xs text-gray-400">Match Score</span>
                <span className="text-sm font-bold text-danger-400">{confidence.toFixed(1)}%</span>
             </div>
@@ -183,7 +160,7 @@ export default function LiveVerification() {
           </div>
         )}
 
-        {verificationStatus === 'idle' && candidates.length > 0 && (
+        {verificationStatus === 'idle' && (
           <div className="text-center text-xs text-gray-500">
              Starting camera verification...
           </div>

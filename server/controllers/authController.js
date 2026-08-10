@@ -100,14 +100,14 @@ const verifyCredentials = async (req, res, next) => {
         new Promise((_, reject) => setTimeout(() => reject(new Error('DB query timeout')), 1500))
       ]);
     } catch (dbErr) {
-      console.warn('DB search timeout/warning in verifyCredentials:', dbErr.message);
-      // Fast fallback: proceed to face scan step for valid credentials input
-      const tempToken = jwt.sign({ email, faceLoginChallenge: true }, process.env.JWT_SECRET, { expiresIn: '15m' });
-      return res.json({
-        requiresFaceScan: true,
-        tempLoginToken: tempToken,
-        email: email,
-        fullName: email.split('@')[0]
+      // SECURITY (P0): FAIL CLOSED. A challenge token must NEVER be issued without a
+      // verified password. If the DB cannot confirm credentials, the login cannot proceed.
+      console.error('[Auth FAIL CLOSED] verifyCredentials: DB unavailable:', dbErr.message);
+      return res.status(503).json({
+        success: false,
+        code: 'AUTH_SERVICE_UNAVAILABLE',
+        message: 'Authentication service is temporarily unavailable. Please try again.',
+        verified: false
       });
     }
 
@@ -189,6 +189,14 @@ const forgotPassword = async (req, res, next) => {
     }
 
     const resetToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '15m' });
+
+    // SECURITY: the reset token is returned in the API response ONLY outside
+    // production (no email provider is configured in this project). In
+    // production builds the token is never exposed to the client — it must be
+    // emailed by a real provider.
+    if (process.env.NODE_ENV === 'production') {
+      return res.json({ message: 'Password reset link sent to email' });
+    }
 
     res.json({ 
       message: 'Password reset link sent to email',
@@ -294,6 +302,7 @@ const registerVoice = async (req, res, next) => {
   try {
     const { embeddings, audio } = req.body;
     let voiceEmbeddingList = embeddings;
+    let voiceModel = 'custom-acoustic-vector';
 
     const userId = req.user?.id || req.user?._id;
     const user = await User.findById(userId);
@@ -307,6 +316,8 @@ const registerVoice = async (req, res, next) => {
       const aiRes = await axios.post(`${aiUrl}/api/voice-detection/extract-embedding`, { audio });
       if (aiRes.data && aiRes.data.embedding) {
         voiceEmbeddingList = [aiRes.data.embedding];
+        // Honest model label: which speaker backend produced this embedding
+        voiceModel = aiRes.data.model === 'ecapa-tdnn' ? 'ecapa-tdnn' : 'custom-acoustic-vector';
       }
     }
 
@@ -314,7 +325,13 @@ const registerVoice = async (req, res, next) => {
       return res.status(400).json({ message: 'Please provide valid voice recording audio' });
     }
 
+    // Infer model from embedding dimensionality when provided directly (192 = ECAPA-TDNN)
+    if (voiceEmbeddingList[0] && Array.isArray(voiceEmbeddingList[0]) && voiceEmbeddingList[0].length === 192) {
+      voiceModel = 'ecapa-tdnn';
+    }
+
     user.voiceEmbeddings = voiceEmbeddingList;
+    user.voiceModel = voiceModel;
     user.registrationStatus = 'ACTIVE';
     user.voiceRegistered = true;
     user.voiceVerified = true;
@@ -341,6 +358,45 @@ const registerVoice = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+};
+
+// @desc    Start the AI monitoring session with the authenticated user's registered
+//          face embeddings. Embeddings are fetched server-side and forwarded DIRECTLY
+//          to the AI service — they never reach the browser. When no registered profile
+//          exists, the AI service honestly reports recognition unavailable (no
+//          fabricated REGISTERED_FACE / IDENTITY_MISMATCH claims).
+// @route   POST /api/auth/ai-session-start
+// @access  Private
+const startAISession = async (req, res, next) => {
+  try {
+    const { sessionId, sessionType } = req.body;
+    if (!sessionId) {
+      return res.status(400).json({ message: 'sessionId is required' });
+    }
+
+    const user = await User.findById(req.user.id).select('+faceEmbeddings');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000';
+    const payload = {
+      session_id: sessionId,
+      user_id: String(user._id),
+      session_type: sessionType || 'EXAM',
+    };
+
+    // Only include embeddings when a REAL registered face profile exists.
+    if (user.faceEmbeddings && Array.isArray(user.faceEmbeddings) && user.faceEmbeddings.length > 0) {
+      payload.registered_face_embeddings = user.faceEmbeddings;
+    }
+
+    const aiRes = await axios.post(`${aiUrl}/api/ai/session/start`, payload);
+    return res.json(aiRes.data);
+  } catch (error) {
+    console.error('[startAISession] AI service error:', error.message);
+    return res.status(503).json({ message: 'AI monitoring service could not be started.' });
   }
 };
 
@@ -393,7 +449,7 @@ const getBiometricStatus = async (req, res, next) => {
 // @access  Public
 const faceLogin = async (req, res, next) => {
   try {
-    const { email, tempLoginToken, image, frames, challengeType, challengeId } = req.body;
+    const { email, tempLoginToken, image, frames, challengeType, challengeId, eyeBlinkLeft, eyeBlinkRight } = req.body;
 
     const framesPayload = frames && Array.isArray(frames) && frames.length > 0 ? frames : (image ? [image] : []);
 
@@ -437,7 +493,9 @@ const faceLogin = async (req, res, next) => {
       livenessRes = await axios.post(`${aiUrl}/api/liveness/verify-multi-frame`, {
         frames: framesPayload,
         challenge_type: challengeType || null,
-        session_id: user ? String(user._id) : 'login_liveness'
+        session_id: user ? String(user._id) : 'login_liveness',
+        eye_blink_left: Array.isArray(eyeBlinkLeft) ? eyeBlinkLeft : undefined,
+        eye_blink_right: Array.isArray(eyeBlinkRight) ? eyeBlinkRight : undefined
       });
     } catch (aiErr) {
       console.error('[Auth FAIL CLOSED] AI Liveness service error/unavailable:', aiErr.message);
@@ -502,6 +560,18 @@ const faceLogin = async (req, res, next) => {
     const confidence = aiResponse.data?.confidence || 0;
     const matchThreshold = parseFloat(process.env.FACE_MATCH_THRESHOLD || '0.48');
 
+    // HONEST: when the SFace model is unavailable, tell the user why login cannot
+    // complete (fail closed — no JWT is ever minted without a real match).
+    if (aiResponse.data && aiResponse.data.status === 'UNAVAILABLE') {
+      return res.status(401).json({
+        success: false,
+        code: 'FACE_SERVICE_UNAVAILABLE',
+        message: aiResponse.data.message || 'Face recognition is currently unavailable. Please try again later.',
+        verified: false,
+        confidence: 0,
+      });
+    }
+
     // ── STEP 3: FINAL BACKEND AUTHORIZATION DECISION ──
     // REQUIRES BOTH: livenessVerified === true AND faceMatchVerified === true
     if (livenessVerified && isVerified && confidence >= matchThreshold) {
@@ -545,6 +615,53 @@ const faceLogin = async (req, res, next) => {
     if (error.response) {
       return res.status(401).json({ message: error.response.data.detail || 'Face verification failed' });
     }
+    next(error);
+  }
+};
+
+// @desc    Verify a live face frame against the authenticated user's registered embeddings
+//          Used by pre-session device checks. NO JWT is issued by this endpoint.
+// @route   POST /api/auth/verify-session-face
+// @access  Private
+const verifySessionFace = async (req, res, next) => {
+  try {
+    const { image } = req.body;
+
+    if (!image) {
+      return res.status(400).json({ message: 'Live face frame is required' });
+    }
+
+    const user = await User.findById(req.user.id).select('+faceEmbeddings');
+    if (!user || !user.faceEmbeddings || user.faceEmbeddings.length === 0) {
+      return res.status(400).json({ message: 'No registered face profile found for this account.' });
+    }
+
+    const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000';
+    const candidates = user.faceEmbeddings.map((emb, idx) => ({ id: `${user._id}_${idx}`, embedding: emb }));
+
+    let aiResponse;
+    try {
+      aiResponse = await axios.post(`${aiUrl}/api/face-recognition/verify`, {
+        image,
+        candidates,
+      });
+    } catch (aiErr) {
+      console.error('[verifySessionFace] AI Face Recognition service error:', aiErr.message);
+      return res.status(503).json({ message: 'Face verification service unavailable.', verified: false });
+    }
+
+    const data = aiResponse.data || {};
+    // Honest tri-state: verified (real match), unavailable (SFace model missing —
+    // identity is monitored continuously IN the room and reported UNCERTAIN), or
+    // mismatch. Unavailability must NOT hard-block pre-session entry.
+    const recognitionUnavailable = data.status === 'UNAVAILABLE' || Boolean(data.error);
+    const verified = Boolean(data.verified);
+    const confidence = data.confidence || 0;
+    const matchThreshold = parseFloat(process.env.FACE_MATCH_THRESHOLD || '0.48');
+    const passed = verified && confidence >= matchThreshold;
+
+    res.json({ verified: passed, confidence, threshold: matchThreshold, recognitionUnavailable });
+  } catch (error) {
     next(error);
   }
 };
@@ -648,30 +765,15 @@ const voiceLogin = async (req, res, next) => {
       });
     }
 
-    // Demo fallback for unregistered test accounts
-    const extractRes = await axios.post(`${aiUrl}/api/voice-detection/extract-embedding`, {
-      audio: audio
+    // SECURITY (P0): FAIL CLOSED. An application JWT is NEVER issued for an account
+    // that cannot be resolved in the database. The legacy 'demo fallback' that minted
+    // tokens for 'temp_user_id' has been removed.
+    return res.status(401).json({
+      success: false,
+      code: 'NO_VOICE_PROFILE',
+      message: 'No registered account matches this voice login attempt.',
+      verified: false
     });
-
-    if (extractRes.data && extractRes.data.speech_detected) {
-      const fallbackId = 'temp_user_id';
-      const token = generateToken(fallbackId);
-      return res.json({
-        message: 'Voice authentication successful! Login complete.',
-        _id: fallbackId,
-        fullName: targetEmail ? targetEmail.split('@')[0] : 'User',
-        email: targetEmail || 'user@example.com',
-        role: 'user',
-        profilePicture: '',
-        token: token,
-        confidence: 0.88
-      });
-    } else {
-      return res.status(401).json({ 
-        message: 'No speech detected in audio recording. Please speak clearly into the microphone.',
-        verified: false
-      });
-    }
   } catch (error) {
     if (error.response) {
       return res.status(401).json({ message: error.response.data.detail || 'Voice verification failed' });
@@ -689,8 +791,10 @@ module.exports = {
   resetPassword,
   registerFace,
   registerVoice,
+  startAISession,
   getFaceEmbeddings,
   getBiometricStatus,
   faceLogin,
-  voiceLogin
+  voiceLogin,
+  verifySessionFace
 };

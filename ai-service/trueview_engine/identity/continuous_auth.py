@@ -33,9 +33,12 @@ class ContinuousAuthenticator:
         now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
         if session_id not in self._session_identity:
+            # HONEST DEFAULT: nothing has been proven yet. IDENTITY_CONSISTENT with
+            # a fabricated 0.95 confidence was previously reported before the first
+            # real recognition check — now we start at UNCERTAIN instead.
             self._session_identity[session_id] = {
-                "status": "IDENTITY_CONSISTENT",
-                "confidence": 0.95,
+                "status": "IDENTITY_UNCERTAIN",
+                "confidence": 0.0,
                 "mismatch_counter": 0,
                 "last_verified_frame": frame_index,
                 "last_face_present": face_detected,
@@ -53,26 +56,44 @@ class ContinuousAuthenticator:
         should_check = (face_returned or multi_person or periodic_check)
 
         if not face_detected:
-            # If no face is present, keep existing verification status but don't flag mismatch
+            # If no face is present, keep existing verification status but don't flag mismatch.
+            # verified reflects only statuses that were actually PROVEN.
             return {
                 "status": state["status"],
-                "verified": state["status"] in ("IDENTITY_CONSISTENT", "IDENTITY_UNCERTAIN"),
+                "verified": state["status"] == "IDENTITY_CONSISTENT",
                 "confidence": state["confidence"],
                 "trigger": "no_face"
             }
 
-        # If quality is POOR, don't flag identity mismatch
+        # If quality is POOR, don't flag identity mismatch — but also don't claim
+        # verified when nothing was proven (poor quality cannot fabricate a match).
         if quality_eval.get("quality") in ("POOR", "UNRELIABLE"):
             return {
                 "status": "IDENTITY_UNCERTAIN",
-                "verified": True,
-                "confidence": 0.70,
+                "verified": state["status"] == "IDENTITY_CONSISTENT",
+                "confidence": state["confidence"],
                 "trigger": "poor_quality_suppressed"
             }
 
+        # HONEST RULE: if recognition could not run (model missing or no registered
+        # profile supplied), we must NOT conclude mismatch — but we also must NOT
+        # claim verified. Keep the last PROVEN status untouched; a never-proven
+        # session stays IDENTITY_UNCERTAIN and is reported as recognition unavailable.
+        if face_rec_result and face_rec_result.get("recognition_unavailable"):
+            return {
+                "status": state["status"],
+                "verified": state["status"] == "IDENTITY_CONSISTENT",
+                "confidence": state["confidence"],
+                "trigger": "recognition_unavailable",
+                "recognition_unavailable": True,
+                "note": face_rec_result.get("note") or "Face recognition unavailable for this session.",
+            }
+
         if should_check and face_rec_result:
-            is_match = face_rec_result.get("verified", True)
-            rec_conf = face_rec_result.get("confidence", 0.95)
+            # Honest default: a missing verified field is treated as NOT verified
+            # (fail closed), never as verified (the previous default fabricated matches).
+            is_match = face_rec_result.get("verified", False)
+            rec_conf = face_rec_result.get("confidence", 0.0)
 
             if is_match:
                 state["mismatch_counter"] = max(0, state["mismatch_counter"] - 1)
@@ -87,7 +108,7 @@ class ContinuousAuthenticator:
                     state["status"] = "IDENTITY_MISMATCH"
                     state["confidence"] = round(rec_conf, 2)
 
-        verified_bool = state["status"] in ("IDENTITY_CONSISTENT", "IDENTITY_UNCERTAIN")
+        verified_bool = state["status"] == "IDENTITY_CONSISTENT"
 
         return {
             "status": state["status"],

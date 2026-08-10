@@ -30,6 +30,7 @@ import ObjectDetectionViewer from '../pages/ObjectDetectionViewer';
 import BehaviourAnalysisViewer from '../pages/BehaviourAnalysisViewer';
 import DecisionEngineViewer from '../pages/DecisionEngineViewer';
 import RoomManager from '../pages/RoomManager';
+import ProctorRoom from '../pages/ProctorRoom';
 
 import VoiceRegistration from '../pages/VoiceRegistration';
 
@@ -50,8 +51,10 @@ export default function AppRoutes() {
           <Route path="/reset-password" element={<ResetPassword />} />
         </Route>
 
-        {/* Protected Dashboard Routes */}
+        {/* Protected Standalone Fullscreen Proctor Room Route */}
         <Route element={<ProtectedRoute />}>
+          <Route path="/proctor-room/:id" element={<ProctorRoom />} />
+
           <Route element={<DashboardLayout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/rooms" element={<RoomManager />} />
