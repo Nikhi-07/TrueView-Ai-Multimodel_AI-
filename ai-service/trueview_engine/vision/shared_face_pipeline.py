@@ -52,7 +52,9 @@ class SharedFacePipeline:
             "face_count": 0,
             "face_box": None,
             "landmarks": [],
-            "identity": {"verified": True, "confidence": 0.95},
+            # HONEST DEFAULT: nothing has been verified yet. Never report
+            # verified=True without a real recognition result (rule 49).
+            "identity": {"verified": False, "confidence": 0.0, "status": "UNAVAILABLE", "recognition_unavailable": True},
             "liveness": {"status": "live", "confidence": 0.95},
             "gaze": {"direction": "center", "confidence": 0.85},
             "head_pose": {"pitch": 0.0, "yaw": 0.0, "roll": 0.0, "direction": "Looking Straight"},
@@ -132,13 +134,51 @@ class SharedFacePipeline:
                 except Exception:
                     pass
 
-        # 5. Periodic Identity Verification (skip-frame strategy)
+        # 5. Periodic Identity Verification (skip-frame strategy) — REAL comparison.
+        #    Honest rule (49): verified=True requires (a) the SFace model actually
+        #    loaded and (b) the registered face embedding supplied by the backend at
+        #    session start. Otherwise status is UNAVAILABLE — no identity event is
+        #    fabricated and the reviewer is never shown a fake REGISTERED_FACE.
         if frame_index % FRAME_INTERVAL_FACE_RECOGNITION == 0:
             rec_svc = self.model_manager.recognition_service
-            if rec_svc is not None:
+            registered = session_context.get("registered_face_embeddings") or []
+
+            if rec_svc is None or not getattr(rec_svc, "is_ready", False):
+                out["identity"] = {
+                    "verified": False, "confidence": 0.0, "status": "UNAVAILABLE",
+                    "recognition_unavailable": True,
+                    "note": "Face recognition model unavailable.",
+                }
+            elif not registered:
+                out["identity"] = {
+                    "verified": False, "confidence": 0.0, "status": "UNAVAILABLE",
+                    "recognition_unavailable": True,
+                    "note": "No registered face profile supplied for this session.",
+                }
+            else:
                 try:
-                    out["identity"] = {"verified": True, "confidence": 0.96}
-                except Exception:
-                    pass
+                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    b64_str = base64.b64encode(buffer).decode('utf-8')
+                    emb_res = rec_svc.extract_embedding(b64_str)
+                    if "error" in emb_res:
+                        out["identity"] = {
+                            "verified": False, "confidence": 0.0, "status": "UNAVAILABLE",
+                            "recognition_unavailable": True, "note": emb_res["error"],
+                        }
+                    else:
+                        candidates = [{"id": f"registered_{i}", "embedding": emb} for i, emb in enumerate(registered)]
+                        match = rec_svc.compare_embedding(emb_res["embedding"], candidates)
+                        out["identity"] = {
+                            "verified": bool(match.get("verified")),
+                            "confidence": float(match.get("confidence", 0.0)),
+                            "status": "VERIFIED" if match.get("verified") else "MISMATCH",
+                            "recognition_unavailable": False,
+                            "matched_user_id": match.get("matched_user_id"),
+                        }
+                except Exception as e:
+                    out["identity"] = {
+                        "verified": False, "confidence": 0.0, "status": "UNAVAILABLE",
+                        "recognition_unavailable": True, "note": f"Recognition error: {e}",
+                    }
 
         return out

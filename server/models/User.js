@@ -107,6 +107,11 @@ const userSchema = new mongoose.Schema(
       default: [],
       select: false, // Do not expose voice embeddings in normal queries
     },
+    voiceModel: {
+      type: String,
+      enum: ['custom-acoustic-vector', 'ecapa-tdnn'],
+      default: 'custom-acoustic-vector', // Honest label: which speaker backend produced the stored embeddings
+    },
   },
   {
     timestamps: true, // Automatically manages createdAt and updatedAt

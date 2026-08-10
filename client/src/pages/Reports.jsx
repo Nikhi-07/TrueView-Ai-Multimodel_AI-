@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Download, Search, Filter, Eye, RefreshCw } from 'lucide-react';
 import PageHeader from '../components/Cards/PageHeader';
 import DataTable from '../components/Tables/DataTable';
+import api from '../services/api';
 
 export default function Reports() {
   const [reports, setReports] = useState([]);
@@ -16,8 +17,10 @@ export default function Reports() {
   const fetchReports = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/reports');
-      const data = await res.json();
+      // Uses the authenticated axios instance (attaches the JWT) – report
+      // routes are protected and scoped per user.
+      const res = await api.get('/reports');
+      const data = res.data;
       if (data.success && Array.isArray(data.reports)) {
         setReports(data.reports);
       }

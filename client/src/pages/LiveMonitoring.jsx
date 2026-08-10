@@ -31,10 +31,21 @@ export default function LiveMonitoring() {
   const sessionIdRef = useRef(`session_${Date.now()}`);
   const timerRef = useRef(null);
   const unifiedLoopRef = useRef(null);
+  // Host report is generated ONCE per session (guard against double-fire from
+  // kickout + unmount cleanup).
+  const reportGeneratedRef = useRef(false);
   const audioContextRef = useRef(null);
   const audioProcessorRef = useRef(null);
   const audioSamplesRef = useRef([]);
   const lastSpokenRef = useRef({ time: 0, text: '' });
+
+  // Latest-frame strategy: at most ONE AI request in flight. If the engine is
+  // still busy, the fresh frame is dropped instead of queuing stale frames, so
+  // alert latency tracks engine latency (never engine latency × backlog).
+  const aiInFlightRef = useRef(false);
+  const monitoringActiveRef = useRef(false);
+  // Event transition gating: only state CHANGES create alerts / DB rows.
+  const emittedEventsRef = useRef({});
 
   const speakAlert = useCallback((text) => {
     if (!('speechSynthesis' in window)) return;
@@ -97,9 +108,28 @@ export default function LiveMonitoring() {
     audioSamplesRef.current = [];
   };
 
+  // Generate the host report from ALL recorded alerts (same as the Proctor Room
+  // auto-report). Runs once per session; the host sees it on the Reports page.
+  const generateHostReport = async () => {
+    if (reportGeneratedRef.current) return;
+    reportGeneratedRef.current = true;
+    await fetch('/api/reports/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('trueview_token')}`
+      },
+      body: JSON.stringify({ sessionId: sessionIdRef.current })
+    }).catch(() => {});
+  };
+
   const stopMonitoringDueToKickout = async () => {
     stopAudioCapture();
-    if (unifiedLoopRef.current) clearInterval(unifiedLoopRef.current);
+    monitoringActiveRef.current = false;
+    if (unifiedLoopRef.current) clearTimeout(unifiedLoopRef.current);
+    // Generate the report BEFORE the stop call so an immediate navigation/exit
+    // cannot abort it (the report request is awaited).
+    await generateHostReport();
     await fetch(`/ai-api/ai/session/${sessionIdRef.current}/stop`, { method: 'POST' }).catch(() => {});
     setIsMonitoringActive(false);
   };
@@ -113,6 +143,8 @@ export default function LiveMonitoring() {
 
   const startMeeting = async () => {
     sessionIdRef.current = `session_${Date.now()}`;
+    // New session -> a fresh report must be allowed for this session.
+    reportGeneratedRef.current = false;
     setAlerts([]);
 
     await fetch('/ai-api/ai/session/start', {
@@ -127,12 +159,35 @@ export default function LiveMonitoring() {
 
     startAudioCapture();
     setIsMonitoringActive(true);
+    monitoringActiveRef.current = true;
 
-    unifiedLoopRef.current = setInterval(async () => {
+    // Latest-frame loop: one in-flight request at a time, reschedule after each
+    // iteration. Stale frames are dropped rather than queued.
+    const scheduleNext = (delay = 100) => {
+      if (!monitoringActiveRef.current) return;
+      unifiedLoopRef.current = setTimeout(runIteration, delay);
+    };
+
+    const runIteration = async () => {
+      if (!monitoringActiveRef.current) return;
+      // Latest-frame: if the engine is still busy, drop this frame and re-check
+      // quickly (60ms) instead of waiting a full cadence behind the backlog.
+      if (aiInFlightRef.current) {
+        scheduleNext(60);
+        return;
+      }
+
+      const frame = cameraFeedRef.current?.captureFrameBase64();
+      const samples = audioSamplesRef.current;
+      if (!frame) {
+        scheduleNext();
+        return;
+      }
+
+      aiInFlightRef.current = true;
+      const captureTs = Date.now();
+
       try {
-        const frame = cameraFeedRef.current?.captureFrameBase64();
-        const samples = audioSamplesRef.current;
-
         const res = await fetch(`/ai-api/ai/session/${sessionIdRef.current}/process`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -140,24 +195,16 @@ export default function LiveMonitoring() {
             session_id: sessionIdRef.current,
             user_id: 'candidate_01',
             session_type: sessionType,
-            video_frame: frame || null,
+            video_frame: frame,
             audio_samples: samples.length ? samples : null,
             timestamp: Date.now() / 1000.0,
+            capture_timestamp: captureTs / 1000.0,
           })
         });
 
         const data = await res.json();
         if (res.ok && data) {
           setEngineResult(data);
-          // Log to Express Server backend
-          fetch('/api/ai-engine/log', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${localStorage.getItem('trueview_token')}`
-            },
-            body: JSON.stringify(data)
-          }).catch(() => {});
 
           let shouldKickout = false;
           let kickoutReason = '';
@@ -167,8 +214,19 @@ export default function LiveMonitoring() {
              kickoutReason = data.decision?.reasons?.[0] || 'High risk score reached. Session suspended.';
           }
 
+          // Emit alerts + persist ONLY on event state transitions (dedup).
+          let hasNewEvents = false;
           if (data.behaviour?.events?.length) {
             data.behaviour.events.forEach(evt => {
+              const evtState = String(evt.state || 'CONFIRMED').toUpperCase();
+              if (emittedEventsRef.current[evt.type] === evtState) return;
+              // Lifecycle close (RESOLVED / *_CLEARED): reset the dedup map so the
+              // NEXT episode of the same event type can alert again (second gaze/
+              // phone episode after a CLEARED must not be silently dropped).
+              if (evtState === 'RESOLVED') emittedEventsRef.current = {};
+              emittedEventsRef.current[evt.type] = evtState;
+              hasNewEvents = true;
+
               addAlert(`[${evt.type.replace(/_/g, ' ')}] ${evt.evidence}`, evt.severity === 'CRITICAL' ? 'danger' : 'warning');
               
               if (evt.type === 'PHONE_DETECTED') {
@@ -185,6 +243,20 @@ export default function LiveMonitoring() {
             });
           }
 
+          // Persist to the Node backend only when new events occurred (the AI
+          // service already returns full engine telemetry; the DB is for history
+          // and reports, not for the real-time loop).
+          if (hasNewEvents) {
+            fetch('/api/ai-engine/log', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('trueview_token')}`
+              },
+              body: JSON.stringify(data)
+            }).catch(() => {});
+          }
+
           if (shouldKickout) {
             if ('speechSynthesis' in window) {
               window.speechSynthesis.cancel();
@@ -197,7 +269,13 @@ export default function LiveMonitoring() {
           }
         }
       } catch (_) {}
-    }, 250);
+      finally {
+        aiInFlightRef.current = false;
+        scheduleNext();
+      }
+    };
+
+    scheduleNext(100);
   };
 
   // Start meeting automatically when entering the room
@@ -278,6 +356,11 @@ export default function LiveMonitoring() {
                 <div className="bg-black/60 backdrop-blur-md px-3 py-2 rounded-lg border border-white/10 flex items-center gap-3 text-[11px] text-gray-200">
                   <span>Gaze: <b className="text-white">{engineResult.attention?.gaze || 'N/A'}</b></span>
                   <span>Pose: <b className="text-white">{engineResult.attention?.head_pose || 'N/A'}</b></span>
+                  {engineResult.performance?.latency_ms > 0 && (
+                    <span title="End-to-end AI inference latency (capture → result)">
+                      Latency: <b className="text-amber-300">{engineResult.performance.latency_ms}ms</b>
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -387,9 +470,9 @@ export default function LiveMonitoring() {
           </button>
 
           <button 
-            onClick={() => {
+            onClick={async () => {
               if (window.confirm("Are you sure you want to leave the examination? This may flag your session.")) {
-                stopMonitoringDueToKickout();
+                await stopMonitoringDueToKickout();
                 window.location.href = '/';
               }
             }}

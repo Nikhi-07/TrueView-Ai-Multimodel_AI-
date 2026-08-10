@@ -5,3 +5,19 @@ python-multipart
 opencv-python-headless
 numpy
 ultralytics
+torch
+onnxruntime
+
+# ── Optional: real ECAPA-TDNN speaker verification (SpeechBrain) ──
+# ECAPA-TDNN (pretrained on VoxCeleb) is used automatically when available.
+# Without these, TrueView falls back to the custom acoustic signature vector,
+# which is always labeled honestly (never presented as ECAPA-TDNN).
+torchaudio>=2.6
+speechbrain==0.5.16
+huggingface-hub==0.26.3
+
+# ── Optional: Whisper speech-to-text (content analysis only) ──
+# Used for transcription + keyword analysis. Speaker identity is ECAPA-TDNN.
+# Lazy-loaded; if the model cannot be downloaded the endpoint reports
+# available=false and monitoring continues without transcription.
+faster-whisper

@@ -8,6 +8,9 @@ active liveness challenges, reviewer feedback logging, accuracy evaluation, and 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+import time
+from collections import deque
+import statistics
 
 from trueview_engine.core.engine import TrueViewEngine
 from trueview_engine.schemas.input_schema import UnifiedMonitoringInput
@@ -26,11 +29,56 @@ feedback_store = ReviewerFeedbackStore()
 accuracy_evaluator = AccuracyEvaluator()
 benchmarker = PerformanceBenchmarker()
 
+# ── Rolling real-time latency tracker (bounded ring buffer) ─────────────
+# Records per-request inference latency + queue delay so the performance
+# panel can show min/max/avg/P95 without unbounded memory growth.
+LATENCY_HISTORY_LEN = 500
+_latency_history: deque = deque(maxlen=LATENCY_HISTORY_LEN)
+_ai_started_at = time.time()
+
+
+def _record_latency(ms: float) -> None:
+    _latency_history.append(ms)
+
+
+def _percentile(sorted_vals: List[float], pct: float) -> float:
+    if not sorted_vals:
+        return 0.0
+    idx = min(len(sorted_vals) - 1, max(0, int(round(pct / 100.0 * (len(sorted_vals) - 1)))))
+    return round(sorted_vals[idx], 1)
+
+
+@router.get("/performance")
+async def get_ai_performance():
+    """
+    Developer-only rolling inference performance snapshot.
+    Intended for the reviewer/admin real-time performance panel; the AI service
+    is an internal endpoint (never exposed to public participants via the UI).
+    """
+    vals = sorted(_latency_history)
+    return {
+        "success": True,
+        "uptime_seconds": round(time.time() - _ai_started_at),
+        "samples": len(vals),
+        "latency_ms": {
+            "min": round(vals[0], 1) if vals else 0.0,
+            "max": round(vals[-1], 1) if vals else 0.0,
+            "avg": round(statistics.mean(vals), 1) if vals else 0.0,
+            "p95": _percentile(vals, 95),
+        },
+        "frame_queue": engine.session_manager.queue_lengths(),
+        "module_health": engine.model_manager.get_health(),
+    }
+
 
 class StartSessionRequest(BaseModel):
     session_id: str
     user_id: Optional[str] = "candidate_01"
     session_type: Optional[str] = "EXAM"  # EXAM | INTERVIEW | ONLINE_CLASS | MEETING | WORKPLACE | CUSTOM
+    # Registered 128-D face embedding(s) for REAL recognition during the session.
+    # Supplied server-side by the backend (never by the browser). When absent,
+    # recognition honestly reports UNAVAILABLE instead of fabricating matches.
+    registered_face_embeddings: Optional[List[List[float]]] = None
 
 
 class ActiveChallengeResponse(BaseModel):
@@ -56,7 +104,8 @@ async def start_session(request: StartSessionRequest):
         sess = engine.session_manager.get_or_create(
             request.session_id,
             user_id=request.user_id or "candidate_01",
-            session_type=request.session_type or "EXAM"
+            session_type=request.session_type or "EXAM",
+            registered_face_embeddings=request.registered_face_embeddings
         )
         return {
             "success": True,
@@ -76,7 +125,9 @@ async def process_monitoring_frame(session_id: str, payload: UnifiedMonitoringIn
     """
     try:
         payload.session_id = session_id
+        t_req = time.time()
         output = engine.process_frame(payload)
+        _record_latency(output.performance.latency_ms if output.performance else (time.time() - t_req) * 1000)
         return output
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Engine processing error: {str(e)}")

@@ -3,6 +3,8 @@ TrueView AI – FastAPI Service Entry Point
 Provides real-time AI processing pipelines.
 """
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from face_detection.router import router as face_detection_router
@@ -15,6 +17,7 @@ from voice_detection.api.router import router as voice_detection_router
 from object_detection.api.router import router as object_detection_router
 from behaviour_analysis.api.router import router as behaviour_analysis_router
 from decision_engine.api.router import router as decision_engine_router
+from speech_analysis.api.router import router as speech_analysis_router
 from trueview_engine.api.monitoring_api import router as unified_ai_router
 
 app = FastAPI(
@@ -23,10 +26,19 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# CORS origins are configurable via AI_CORS_ORIGINS (comma separated).
+# Default "*" is acceptable for local development; restrict to the actual
+# client origin(s) in production.
+_ai_cors_origins = [
+    o.strip()
+    for o in os.environ.get("AI_CORS_ORIGINS", "*").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
-    CORSMiddleware, 
-    allow_origins=["*"], 
-    allow_methods=["*"], 
+    CORSMiddleware,
+    allow_origins=_ai_cors_origins or ["*"],
+    allow_methods=["*"],
     allow_headers=["*"]
 )
 
@@ -45,8 +57,12 @@ app.include_router(voice_detection_router, prefix="/api/voice-detection", tags=[
 app.include_router(object_detection_router, prefix="/api/object-detection", tags=["Object Detection"])
 app.include_router(behaviour_analysis_router, prefix="/api/behaviour-analysis", tags=["Behaviour Analysis"])
 app.include_router(decision_engine_router, prefix="/api/decision-engine", tags=["Decision Engine"])
+app.include_router(speech_analysis_router, prefix="/api/speech-analysis", tags=["Speech Analysis"])
 app.include_router(unified_ai_router, prefix="/api/ai", tags=["TrueView AI Engine"])
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    host = os.environ.get("AI_HOST", "0.0.0.0")
+    port = int(os.environ.get("AI_PORT", "8000"))
+    reload = os.environ.get("AI_RELOAD", "false").lower() in ("1", "true", "yes")
+    uvicorn.run("main:app", host=host, port=port, reload=reload)

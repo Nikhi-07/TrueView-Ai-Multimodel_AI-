@@ -1,0 +1,25 @@
+{
+  "generated_at": "2026-08-10T15:17:49Z",
+  "dataset": "C:\\Users\\tarun\\Downloads\\TrueView\\evaluation\\dataset",
+  "blink": {
+    "status": "MEASURED",
+    "positive_sequences": 3,
+    "negative_sequences": 7,
+    "confusion_matrix": {
+      "true_positive": 3,
+      "false_negative": 0,
+      "false_positive": 0,
+      "true_negative": 7
+    },
+    "true_positive_rate": 1.0,
+    "false_positive_rate": 0.0,
+    "accuracy": 1.0,
+    "false_positives_by_category": {
+      "no_blink": 0,
+      "head_movement": 0,
+      "laptop_tilt": 0,
+      "camera_movement": 0
+    },
+    "note": "Synthetic blendshape traces. Tilt/camera-motion categories verify that head motion does NOT count as a blink."
+  }
+}

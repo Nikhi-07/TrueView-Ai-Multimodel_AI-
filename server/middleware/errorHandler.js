@@ -1,11 +1,15 @@
 const errorHandler = (err, req, res, next) => {
   const statusCode = res.statusCode ? res.statusCode : 500;
+  const isProduction = process.env.NODE_ENV === 'production';
 
   res.status(statusCode);
 
   res.json({
-    message: err.message,
-    stack: process.env.NODE_ENV === 'production' ? null : err.stack,
+    // Never leak internal/database details to users in production.
+    message: isProduction && statusCode >= 500
+      ? 'Internal server error'
+      : (err.message || 'Something went wrong'),
+    stack: isProduction ? null : err.stack,
   });
 };
 

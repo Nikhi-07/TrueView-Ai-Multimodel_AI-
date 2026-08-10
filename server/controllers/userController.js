@@ -39,13 +39,15 @@ const updateProfile = async (req, res, next) => {
       user.phone = req.body.phone || user.phone;
       
       if (req.body.password) {
-        // Optional: require current password to change password
+        // SECURITY: a self-service password change ALWAYS requires the current
+        // password. Without it the endpoint rejects the request (no silent
+        // bypass for an account whose session token may have been stolen).
         if (req.body.currentPassword && await user.matchPassword(req.body.currentPassword)) {
           user.password = req.body.password;
         } else if (req.body.currentPassword) {
-           return res.status(400).json({ message: 'Current password incorrect' });
+          return res.status(400).json({ message: 'Current password incorrect' });
         } else {
-           user.password = req.body.password; // Admin reset or direct change without current
+          return res.status(400).json({ message: 'Current password is required to change the password' });
         }
       }
 

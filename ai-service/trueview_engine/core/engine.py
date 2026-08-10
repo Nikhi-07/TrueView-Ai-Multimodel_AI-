@@ -8,10 +8,11 @@ Dynamic Risk, and Explainable AI modules behind ONE unified interface.
 """
 
 import time
+import uuid
 import cv2
 import numpy as np
 import base64
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from trueview_engine.models.model_manager import ModelManager
 from trueview_engine.vision.shared_face_pipeline import SharedFacePipeline
@@ -52,6 +53,13 @@ from trueview_engine.schemas.output_schema import (
     ExplanationItem,
     PerformanceMetrics,
     ModuleHealthStatus,
+)
+from trueview_engine.config.thresholds import (
+    TEMPORAL_WINDOW_PHONE_SECS,
+    TEMPORAL_WINDOW_MULTIPLE_PERSONS,
+    TEMPORAL_WINDOW_NO_FACE,
+    TEMPORAL_WINDOW_LOOKING_AWAY,
+    TEMPORAL_WINDOW_SPEAKING,
 )
 
 
@@ -97,6 +105,10 @@ class TrueViewEngine:
         self.session_manager = SessionManager()
 
         self._last_yolo_result: Dict[str, Any] = {"summary": {"person_count": 1, "phone_detected": False}, "detections": []}
+        # Per-session last-confirmed event map: enables DETECTED -> CLEARED lifecycle
+        # transitions so the UI never re-emits the same event every frame.
+        # session_id -> { event_key -> { "confirmed": bool, "duration": float } }
+        self._prev_confirmed: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._initialized = True
         print("[TrueViewEngine] [OK] TrueView Intelligence Engine Ready!")
 
@@ -105,6 +117,8 @@ class TrueViewEngine:
         Process single unified monitoring payload through the 14-stage intelligence pipeline.
         """
         t0 = time.time()
+        timings: Dict[str, float] = {}
+        t_mark = t0
         session_id = payload.session_id
         session_context = {
             "session_id": session_id,
@@ -117,6 +131,10 @@ class TrueViewEngine:
             user_id=payload.user_id or "candidate_01",
             session_type=payload.session_type or "EXAM"
         )
+        # Real face-recognition source of truth: registered embeddings supplied by the
+        # backend at session start. The shared face pipeline uses them (and only them)
+        # to verify identity — it never fabricates a match without them.
+        session_context["registered_face_embeddings"] = getattr(session_inst, "registered_face_embeddings", None) or []
         session_inst.update_fps()
         frame_idx = session_inst.frame_count
 
@@ -124,15 +142,21 @@ class TrueViewEngine:
         frame: Optional[np.ndarray] = None
         if payload.video_frame:
             frame = self._decode_image(payload.video_frame)
+        timings["decode"] = round((time.time() - t_mark) * 1000, 1)
+        t_mark = time.time()
 
         # Stage 1: Input Quality Intelligence
         video_qual = self.quality_engine.evaluate_video(frame)
         audio_qual = self.quality_engine.evaluate_audio(payload.audio_samples)
         quality_eval = self.quality_engine.combine_quality(video_qual, audio_qual)
+        timings["quality"] = round((time.time() - t_mark) * 1000, 1)
+        t_mark = time.time()
 
         # Stage 2: AI Perception Modules (Shared Face Pipeline)
         shared_face = self.vision_pipeline.process(frame, frame_idx, session_context)
         audio_res = self.audio_pipeline.process(payload.audio_samples)
+        timings["perception"] = round((time.time() - t_mark) * 1000, 1)
+        t_mark = time.time()
 
         # Dynamic Skip-Frame Schedule for YOLO Object Detection
         intervals = self.scheduler.get_execution_intervals()
@@ -145,6 +169,8 @@ class TrueViewEngine:
                         self._last_yolo_result = yolo_res
                 except Exception:
                     pass
+        timings["yolo"] = round((time.time() - t_mark) * 1000, 1)
+        t_mark = time.time()
 
         # Stage 3: Personal Session Calibration & Threshold Adaptation
         pose = shared_face.get("head_pose", {})
@@ -175,7 +201,7 @@ class TrueViewEngine:
         attention_eval = self.attention_engine.evaluate(
             session_id, gaze.get("direction", "center"), pose.get("direction", "Looking Straight"),
             calibrated_pose_deltas, shared_face.get("face_detected", False), quality_eval,
-            prev_dur
+            prev_dur, session_context["session_type"]
         )
 
         # Stage 7: Multimodal Feature Fusion Layer
@@ -183,31 +209,37 @@ class TrueViewEngine:
             shared_face, audio_res, self._last_yolo_result, quality_eval,
             identity_eval, liveness_eval, attention_eval, session_context
         )
+        timings["fusion"] = round((time.time() - t_mark) * 1000, 1)
+        t_mark = time.time()
 
         # Stage 8: Temporal Memory Engine
         self.memory_engine.push_snapshot(session_id, fused_features)
         temp_metrics = self.memory_engine.get_window_metrics(session_id)
 
         # Stage 9: Temporal Event Confirmation State Machine
+        # Confirmation windows come from config/thresholds.py (conservative real-time
+        # tuning). The 2-consecutive-frame rule still filters single-frame noise;
+        # these windows decide only how long a signal must persist BEFORE the first
+        # alert is emitted — they never delay deduplication of later frames.
         st_phone = self.event_state_machine.update_condition(
             session_id, "phone", fused_features["environment"]["phone_detected"],
-            0.92, "Mobile phone detected in camera frame.", 0.8, quality_eval
+            0.92, "Mobile phone detected in camera frame.", TEMPORAL_WINDOW_PHONE_SECS, quality_eval
         )
         st_multi = self.event_state_machine.update_condition(
             session_id, "multiple_persons", fused_features["environment"]["person_count"] > 1,
-            0.90, f"{fused_features['environment']['person_count']} persons in frame.", 0.8, quality_eval
+            0.90, f"{fused_features['environment']['person_count']} persons in frame.", TEMPORAL_WINDOW_MULTIPLE_PERSONS, quality_eval
         )
         st_no_face = self.event_state_machine.update_condition(
             session_id, "no_face", not fused_features["face_detected"],
-            0.95, "Candidate not visible in view.", 2.0, quality_eval
+            0.95, "Candidate not visible in view.", TEMPORAL_WINDOW_NO_FACE, quality_eval
         )
         st_dist = self.event_state_machine.update_condition(
             session_id, "looking_away", fused_features["attention"]["status"] in ("PROLONGED_DISTRACTION", "REPEATED_DISTRACTION", "OFFSCREEN_GLANCE"),
-            0.88, f"Candidate attention diverted ({fused_features['attention']['status']}).", 1.5, quality_eval
+            0.88, f"Candidate attention diverted ({fused_features['attention']['status']}).", TEMPORAL_WINDOW_LOOKING_AWAY, quality_eval
         )
         st_speak = self.event_state_machine.update_condition(
             session_id, "speaking", fused_features["audio"]["speaking"],
-            0.85, "Voice activity detected.", 1.0, quality_eval
+            0.85, "Voice activity detected.", TEMPORAL_WINDOW_SPEAKING, quality_eval
         )
 
         confirmed_states = {
@@ -216,6 +248,43 @@ class TrueViewEngine:
             "no_face": st_no_face,
             "looking_away": st_dist,
             "speaking": st_speak,
+        }
+        timings["confirmation"] = round((time.time() - t_mark) * 1000, 1)
+        t_mark = time.time()
+
+        # ── DETECTED -> CLEARED lifecycle transitions ─────────────────────────
+        # When a previously-confirmed condition resolves, emit a *_CLEARED event
+        # ONCE so the timeline shows the full lifecycle (PHONE_DETECTED ...
+        # PHONE_CLEARED) instead of a single stale alert. The server and clients
+        # deduplicate; only state TRANSITIONS create events.
+        prev_confirmed = self._prev_confirmed.get(session_id, {})
+        cleared_events: List[Dict[str, Any]] = []
+        cleared_map = {
+            "phone": ("PHONE_CLEARED", "Mobile phone no longer detected in camera view."),
+            "multiple_persons": ("MULTIPLE_PERSONS_CLEARED", "Scene returned to a single person in camera view."),
+            "no_face": ("FACE_PRESENT", "Candidate face is visible again."),
+            "looking_away": ("GAZE_CLEARED", "Candidate attention returned to the screen."),
+            "speaking": ("SPEECH_STOPPED", "Voice activity stopped."),
+        }
+        for key, st in confirmed_states.items():
+            was_confirmed = bool(prev_confirmed.get(key, {}).get("confirmed"))
+            if was_confirmed and not st.get("confirmed"):
+                cleared_type, cleared_evidence = cleared_map[key]
+                cleared_events.append({
+                    "event_id": f"evt_{uuid.uuid4().hex[:8]}",
+                    "session_id": session_id,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "type": cleared_type,
+                    "severity": "LOW",
+                    "confidence": prev_confirmed[key].get("confidence", 0.85),
+                    "duration": prev_confirmed[key].get("duration", 0.0),
+                    "evidence": cleared_evidence,
+                    "state": "RESOLVED",
+                })
+        self._prev_confirmed[session_id] = {
+            key: {"confirmed": bool(st.get("confirmed")), "duration": st.get("duration", 0.0),
+                   "confidence": st.get("confidence", 0.85)}
+            for key, st in confirmed_states.items()
         }
 
         # Stage 10: Event Correlation Engine
@@ -232,28 +301,41 @@ class TrueViewEngine:
         uncertainty_eval = self.uncertainty_engine.evaluate(
             0.92, quality_eval, agree_score, any(s["confirmed"] for s in confirmed_states.values())
         )
+        timings["correlation"] = round((time.time() - t_mark) * 1000, 1)
+        t_mark = time.time()
 
         # Stage 12: Context-Aware Behaviour Engine
         behaviour_summary_data = self.behaviour_engine.evaluate(
             fused_features, temp_metrics, confirmed_states, session_context
         )
+        # Merge lifecycle (CLEARED) events into the behaviour stream
+        if cleared_events:
+            behaviour_summary_data["events"] = cleared_events + behaviour_summary_data.get("events", [])
 
         # Stage 13: Dynamic Risk & Unified Decision Engine
+        # RESOLVED (CLEARED) events are informational lifecycle markers: they must
+        # NOT inflate the risk score or drive the decision engine, so only active
+        # (POTENTIAL/OBSERVING/CONFIRMED/ACTIVE) events feed stages 13-14.
+        active_events = [e for e in behaviour_summary_data.get("events", []) if e.get("state") != "RESOLVED"]
         decision_and_risk = self.decision_engine.evaluate(
-            fused_features, behaviour_summary_data, correlated_patterns, uncertainty_eval, session_context
+            fused_features, {**behaviour_summary_data, "events": active_events},
+            correlated_patterns, uncertainty_eval, session_context
         )
 
         # Update Scheduler Performance Mode based on current risk
         current_risk_val = decision_and_risk.get("risk", {}).get("current", 0.0)
         curr_mode = self.scheduler.determine_mode(current_risk_val, session_inst.fps)
+        timings["decision"] = round((time.time() - t_mark) * 1000, 1)
+        t_mark = time.time()
 
         # Stage 14: Explainable AI Engine & Structured Output
         explanation_data = self.explanation_engine.generate_explanation(
-            behaviour_summary_data.get("events", []), correlated_patterns,
+            active_events, correlated_patterns,
             current_risk_val, session_context["session_type"], quality_eval
         )
 
         latency_ms = round((time.time() - t0) * 1000, 1)
+        timings["explanation"] = round((time.time() - t_mark) * 1000, 1)
         now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
         # Construct Section 27 Standardized Output Payload
@@ -261,6 +343,9 @@ class TrueViewEngine:
             session_id=session_id,
             timestamp=now_str,
             status=session_inst.state,
+            inference_start_timestamp=t0,
+            inference_end_timestamp=time.time(),
+            event_generated_timestamp=time.time(),
 
             quality=QualityStatus(
                 video_quality=quality_eval["video_quality"],
@@ -279,6 +364,8 @@ class TrueViewEngine:
                 status=identity_eval["status"],
                 confidence=identity_eval["confidence"],
                 user_id=payload.user_id,
+                recognition_unavailable=bool(identity_eval.get("recognition_unavailable", False)),
+                note=identity_eval.get("note"),
             ),
 
             liveness=LivenessStatus(
@@ -340,6 +427,7 @@ class TrueViewEngine:
                 fps=session_inst.fps,
                 latency_ms=latency_ms,
                 mode=curr_mode,
+                latency_breakdown=timings,
             ),
 
             system_health=ModuleHealthStatus(
@@ -359,6 +447,7 @@ class TrueViewEngine:
         self.event_state_machine.reset(session_id)
         self.decision_engine.reset()
         self.session_manager.remove(session_id)
+        self._prev_confirmed.pop(session_id, None)
         self._last_yolo_result = {"summary": {"person_count": 1, "phone_detected": False}, "detections": []}
 
     @staticmethod

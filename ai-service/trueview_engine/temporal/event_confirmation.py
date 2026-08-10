@@ -3,6 +3,13 @@ Temporal Event Confirmation State Machine – TrueView AI Engine
 
 Filters single-frame noise by transitioning events through:
 POTENTIAL → OBSERVING → CONFIRMED → ACTIVE → RESOLVED
+
+Real-time guarantees:
+  - The state machine NEVER delays the first qualified event beyond the
+    configured confirmation window (see config/thresholds.py).
+  - Every transition is timestamped (start_ts / confirmed_ts / resolved_ts) so
+    downstream consumers can compute true detection latency and emit
+    DETECTED/ACTIVE/CLEARED lifecycle events.
 """
 
 import time
@@ -42,6 +49,8 @@ class EventConfirmationStateMachine:
             sess_events[event_key] = {
                 "state": "POTENTIAL" if raw_active else "RESOLVED",
                 "start_ts": now if raw_active else None,
+                "confirmed_ts": None,
+                "resolved_ts": None,
                 "duration": 0.0,
                 "consecutive_count": 1 if raw_active else 0,
                 "confidence": confidence,
@@ -65,6 +74,7 @@ class EventConfirmationStateMachine:
                 evt["state"] = "POTENTIAL"
                 evt["start_ts"] = now
                 evt["consecutive_count"] = 1
+                evt["confirmed_ts"] = None
             else:
                 evt["consecutive_count"] += 1
 
@@ -78,6 +88,8 @@ class EventConfirmationStateMachine:
                 evt["state"] = "OBSERVING"
 
             if evt["state"] == "OBSERVING" and dur >= required_duration_sec:
+                if evt["state"] != "CONFIRMED":
+                    evt["confirmed_ts"] = now
                 evt["state"] = "CONFIRMED"
 
             if evt["state"] == "CONFIRMED" and dur >= (required_duration_sec + 1.0):
@@ -85,8 +97,10 @@ class EventConfirmationStateMachine:
         else:
             if evt["state"] in ("CONFIRMED", "ACTIVE"):
                 evt["state"] = "RESOLVED"
+                evt["resolved_ts"] = now
             elif evt["state"] in ("POTENTIAL", "OBSERVING"):
                 evt["state"] = "RESOLVED"
+                evt["resolved_ts"] = now
             evt["duration"] = 0.0
             evt["consecutive_count"] = 0
 
@@ -98,6 +112,8 @@ class EventConfirmationStateMachine:
             "duration": evt["duration"],
             "confidence": evt["confidence"],
             "evidence": evt["evidence"],
+            "confirmed_ts": evt.get("confirmed_ts"),
+            "resolved_ts": evt.get("resolved_ts"),
         }
 
     def reset(self, session_id: str):

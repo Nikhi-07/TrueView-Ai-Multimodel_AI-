@@ -27,6 +27,18 @@ const reportSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    startTime: {
+      type: Date,
+      default: null,
+    },
+    endTime: {
+      type: Date,
+      default: null,
+    },
+    completedByTimer: {
+      type: Boolean,
+      default: false,
+    },
     overallIntegrityScore: {
       type: Number,
       default: 100,
@@ -43,12 +55,76 @@ const reportSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    cameraInterruptions: {
+      type: Number,
+      default: 0,
+    },
+    microphoneInterruptions: {
+      type: Number,
+      default: 0,
+    },
+    multipleSpeakerEvents: {
+      type: Number,
+      default: 0,
+    },
+    speechEvents: {
+      type: Number,
+      default: 0,
+    },
+    livenessFailures: {
+      type: Number,
+      default: 0,
+    },
+    objectDetections: {
+      type: Number,
+      default: 0,
+    },
+    gazeEvents: {
+      type: Number,
+      default: 0,
+    },
+    behaviourAlerts: {
+      type: Number,
+      default: 0,
+    },
+    suspensionEvents: {
+      type: Number,
+      default: 0,
+    },
+    webRtcConnections: {
+      type: Number,
+      default: 0,
+    },
+    webRtcDisconnects: {
+      type: Number,
+      default: 0,
+    },
+    faceVerified: {
+      type: Boolean,
+      default: false,
+    },
+    livenessPassed: {
+      type: Boolean,
+      default: false,
+    },
     alerts: [
       {
-        type: String,
+        // NOTE: field is named `eventType` because a `type` key would be
+        // interpreted by Mongoose as the schema-type marker (turning this array
+        // into [String] and breaking object subdocuments).
+        eventType: String,
         severity: String,
         evidence: String,
         timestamp: Date,
+      },
+    ],
+    timeline: [
+      {
+        timestamp: Date,
+        eventType: String,
+        severity: String,
+        description: String,
+        confidence: Number,
       },
     ],
     status: {

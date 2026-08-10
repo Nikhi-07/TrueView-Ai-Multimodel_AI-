@@ -65,11 +65,18 @@ class ModelManager:
             self.landmark_extractor = None
             self.health_status["face_detection"] = "FAILED"
 
-        # 2. Face Recognition (FaceNet/SFace)
+        # 2. Face Recognition (SFace)
+        # HONEST HEALTH: constructor succeeds even when the SFace ONNX file is
+        # missing (it only warns). READY is reported ONLY when the real model
+        # loaded — never because the class merely instantiated.
         try:
             self.recognition_service = FaceRecognizer()
-            self.health_status["face_recognition"] = "READY"
-            print("[ModelManager] [OK] Face Recognition Service loaded.")
+            if getattr(self.recognition_service, "is_ready", False):
+                self.health_status["face_recognition"] = "READY"
+                print("[ModelManager] [OK] Face Recognition Service loaded (SFace model ready).")
+            else:
+                self.health_status["face_recognition"] = "FAILED"
+                print("[ModelManager] [WARN] Face Recognition service unavailable: SFace model file missing.")
         except Exception as e:
             print(f"[ModelManager] [WARN] Face Recognition failed to load: {e}")
             self.recognition_service = None

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Camera, CheckCircle, AlertTriangle, ArrowRight, ShieldCheck, Check } from 'lucide-react';
+import { Camera, CheckCircle, AlertTriangle, ArrowRight, ShieldCheck, Check, Sparkles, Eye } from 'lucide-react';
 import PageHeader from '../components/Cards/PageHeader';
 import useCamera from '../hooks/useCamera';
+import useFaceLandmarker from '../hooks/useFaceLandmarker';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 
@@ -18,11 +19,19 @@ export default function FaceRegistration() {
   const navigate = useNavigate();
   const { completeFaceRegistration } = useAuth();
   const { videoRef, isActive, error: camError, startCamera, stopCamera, captureFrameBase64 } = useCamera();
-  
+
   const [currentStep, setCurrentStep] = useState(0);
   const [capturedEmbeddings, setCapturedEmbeddings] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isCompleted, setIsCompleted] = useState(false);
+  const [livenessStatus, setLivenessStatus] = useState('IDLE'); // IDLE | CHECKING | LIVE | SPOOF | SERVICE_UNAVAILABLE
+
+  // Real MediaPipe blendshape blink detection (tilt-independent)
+  const [blinkCount, setBlinkCount] = useState(0);
+  const landmarker = useFaceLandmarker(videoRef, {
+    enabled: !isCompleted,
+    onBlink: (count) => setBlinkCount(count)
+  });
 
   useEffect(() => {
     startCamera();
@@ -42,7 +51,45 @@ export default function FaceRegistration() {
     }
 
     try {
-      // POST to FastAPI face recognition module to extract embedding
+      // ── STEP 1: Mandatory Liveness / Presentation Attack Detection (PAD) gate ──
+      // A face registration must not simply capture a photograph. MiniFASNet anti-spoofing
+      // must confirm a LIVE human before the embedding is extracted. If the AI service is
+      // unavailable this FAILS CLOSED (no embedding is captured).
+      setLivenessStatus('CHECKING');
+      const blendshapes = landmarker.getBlendshapes();
+
+      let livenessResponse;
+      try {
+        livenessResponse = await fetch('/ai-api/liveness/evaluate-auth-liveness', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image: frame,
+            session_id: 'face-registration',
+            eye_blink_left: blendshapes.left,
+            eye_blink_right: blendshapes.right
+          })
+        });
+      } catch (_) {
+        setLivenessStatus('SERVICE_UNAVAILABLE');
+        throw new Error('Liveness verification service is unavailable. Please try again later.');
+      }
+
+      if (!livenessResponse || !livenessResponse.ok) {
+        setLivenessStatus('SERVICE_UNAVAILABLE');
+        throw new Error('Liveness verification service error. Please try again.');
+      }
+
+      const livenessData = await livenessResponse.json();
+      const antiSpoof = livenessData.antiSpoof || {};
+
+      if (antiSpoof.status !== 'LIVE' || !antiSpoof.is_live) {
+        setLivenessStatus('SPOOF');
+        throw new Error(antiSpoof.message || 'Presentation attack detected. Live human face required for registration.');
+      }
+      setLivenessStatus('LIVE');
+
+      // ── STEP 2: POST to FastAPI face recognition module to extract embedding ──
       const response = await fetch('/ai-api/face-recognition/extract-embedding', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -145,17 +192,17 @@ export default function FaceRegistration() {
                 <span className="w-2 h-2 rounded-full bg-success-500 animate-ping"></span>
                 <span>● Face detected</span>
               </div>
-              <div className="flex items-center gap-1.5 text-xs text-success-400 font-semibold">
-                <Check size={14} />
-                <span>Face centered</span>
+              <div className={`flex items-center gap-1.5 text-xs font-semibold ${livenessStatus === 'LIVE' ? 'text-success-400' : livenessStatus === 'SPOOF' || livenessStatus === 'SERVICE_UNAVAILABLE' ? 'text-danger-400' : 'text-gray-400'}`}>
+                <ShieldCheck size={14} />
+                <span>Live person (PAD): {livenessStatus === 'LIVE' ? 'VERIFIED' : livenessStatus === 'CHECKING' ? 'Checking…' : livenessStatus === 'SPOOF' ? 'FAILED' : livenessStatus === 'SERVICE_UNAVAILABLE' ? 'Unavailable' : 'Waiting…'}</span>
+              </div>
+              <div className={`flex items-center gap-1.5 text-xs font-semibold ${blinkCount > 0 ? 'text-success-400' : 'text-gray-400'}`}>
+                <Eye size={14} />
+                <span>Natural blink: {blinkCount}</span>
               </div>
               <div className="flex items-center gap-1.5 text-xs text-success-400 font-semibold">
-                <Check size={14} />
-                <span>Good lighting</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-xs text-success-400 font-semibold">
-                <Check size={14} />
-                <span>One face detected</span>
+                <Sparkles size={14} />
+                <span>MediaPipe blendshapes: {landmarker.status === 'ready' ? 'ON' : 'loading…'}</span>
               </div>
             </div>
 

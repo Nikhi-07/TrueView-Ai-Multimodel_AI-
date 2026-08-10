@@ -108,12 +108,20 @@ THRESHOLD_VAD_SPEECH         = 0.50
 
 # ──────────────────────────────────────────────
 # Temporal Persistence Windows (Seconds)
+#
+# Tuned for REAL-TIME alert delivery (spec target 300-1000 ms):
+#   - The FIRST qualified alert must reach the reviewer as fast as hardware
+#     allows, while the mandatory 2-consecutive-frame confirmation still
+#     filters single-frame noise and spoof/PAD confirmation is untouched.
+#   - These are DETECTION windows, NOT alert cooldowns: they only decide how
+#     long a signal must persist before an event is considered real. They
+#     never delay deduplication (that is handled by the event state machine).
 # ──────────────────────────────────────────────
-TEMPORAL_WINDOW_PHONE_SECS       = 0.8  # Require 0.8s phone persistence
-TEMPORAL_WINDOW_MULTIPLE_PERSONS = 0.8  # Require 0.8s multi-person persistence
-TEMPORAL_WINDOW_LOOKING_AWAY     = 1.5  # Require 1.5s looking away before event
-TEMPORAL_WINDOW_NO_FACE          = 2.0  # Require 2.0s absent face
-TEMPORAL_WINDOW_SPEAKING         = 1.0  # Require 1.0s speech
+TEMPORAL_WINDOW_PHONE_SECS       = 0.35  # Require ~0.35s phone persistence
+TEMPORAL_WINDOW_MULTIPLE_PERSONS = 0.35  # Require ~0.35s multi-person persistence
+TEMPORAL_WINDOW_LOOKING_AWAY     = 0.8   # Require 0.8s looking away before event
+TEMPORAL_WINDOW_NO_FACE          = 0.8   # Require 0.8s absent face (2-frame rule still filters noise)
+TEMPORAL_WINDOW_SPEAKING         = 0.8   # Require 0.8s speech
 
 # Risk Decay Rate (points recovered per clean second)
 RISK_DECAY_RATE = 1.0

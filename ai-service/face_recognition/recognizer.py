@@ -33,6 +33,14 @@ class FaceRecognizer:
         # Threshold for SFace Cosine similarity (typically 0.36 for loose, 0.48+ for strict verification)
         self.cosine_threshold = 0.48
 
+    @property
+    def is_ready(self) -> bool:
+        """
+        True only when the real SFace ONNX model is loaded and usable.
+        The engine must NEVER fall back to fabricated results when this is False.
+        """
+        return self.recognizer is not None and os.path.exists(self.model_path)
+
     def _init_recognizer(self):
         if self.recognizer is not None:
             return True
@@ -71,14 +79,11 @@ class FaceRecognizer:
             return {"error": "Failed to decode image into frame"}
 
         if self.detector is None or not self._init_recognizer():
-            # Fallback: Generate a deterministic 128-D embedding based on image hash if model unavailable
-            import hashlib
-            img_hash = hashlib.sha256(image_data.encode('utf-8')).digest()
-            synthetic_emb = [(b / 255.0) * 2 - 1 for b in (img_hash * 4)[:128]]
+            # HONEST RULE: never fabricate embeddings. If the SFace model is missing,
+            # report unavailability explicitly so callers can fail closed (no identity
+            # claim is ever made from synthetic data).
             return {
-                "embedding": synthetic_emb,
-                "face_detected": True,
-                "note": "Synthetic fallback embedding used"
+                "error": "Face recognition model unavailable. Place face_recognition_sface_2021dec.onnx in face_detection/models/ to enable face verification."
             }
 
         try:
@@ -114,6 +119,47 @@ class FaceRecognizer:
             print(f"Error extracting embedding via OpenCV SFace: {e}")
             return {"error": f"Failed to extract face features from image: {str(e)}"}
 
+    def compare_embedding(self, live_embedding, candidate_embeddings: list, threshold=None):
+        """
+        Compare a live 128-D embedding against candidate embeddings using cosine
+        similarity. Verification passes only when the best score is at or above the
+        strict SFace threshold.
+        """
+        thresh = threshold if threshold is not None else self.cosine_threshold
+        live_embedding = np.array(live_embedding, dtype=np.float32)
+        norm_live = np.linalg.norm(live_embedding)
+        if norm_live > 0:
+            live_embedding = live_embedding / norm_live
+
+        best_match = None
+        best_score = -1.0
+
+        for candidate in candidate_embeddings:
+            cand_emb = np.array(candidate.get("embedding", []), dtype=np.float32)
+            if cand_emb.size == 0:
+                continue
+            norm_cand = np.linalg.norm(cand_emb)
+            if norm_cand > 0:
+                cand_emb = cand_emb / norm_cand
+
+            # Compute cosine similarity
+            similarity = float(np.dot(live_embedding, cand_emb))
+
+            if similarity > best_score:
+                best_score = similarity
+                best_match = candidate
+
+        # Verification passes if similarity is above strict threshold
+        is_matched = best_score >= thresh
+        print(f"[SFace Match] Best similarity = {best_score:.4f}, Threshold = {thresh:.2f}, Verified = {is_matched}")
+
+        return {
+            "verified": is_matched,
+            "confidence": best_score,
+            "matched_user_id": best_match.get("id") if (is_matched and best_match) else None,
+            "status": "Verified" if is_matched else ("Unknown User" if best_score > 0 else "No Match")
+        }
+
     def verify(self, image_data: str, candidate_embeddings: list):
         """
         Compares live face embedding against a list of candidate embeddings.
@@ -122,35 +168,5 @@ class FaceRecognizer:
         result = self.extract_embedding(image_data)
         if "error" in result:
             return result
-            
-        live_embedding = np.array(result["embedding"], dtype=np.float32)
-        norm_live = np.linalg.norm(live_embedding)
-        if norm_live > 0:
-            live_embedding = live_embedding / norm_live
 
-        best_match = None
-        best_score = -1.0
-        
-        for candidate in candidate_embeddings:
-            cand_emb = np.array(candidate["embedding"], dtype=np.float32)
-            norm_cand = np.linalg.norm(cand_emb)
-            if norm_cand > 0:
-                cand_emb = cand_emb / norm_cand
-            
-            # Compute cosine similarity
-            similarity = float(np.dot(live_embedding, cand_emb))
-            
-            if similarity > best_score:
-                best_score = similarity
-                best_match = candidate
-                
-        # Verification passes if similarity is above strict threshold
-        is_matched = best_score >= self.cosine_threshold
-        print(f"[SFace Match] Best similarity = {best_score:.4f}, Threshold = {self.cosine_threshold:.2f}, Verified = {is_matched}")
-        
-        return {
-            "verified": is_matched,
-            "confidence": best_score,
-            "matched_user_id": best_match["id"] if (is_matched and best_match) else None,
-            "status": "Verified" if is_matched else ("Unknown User" if best_score > 0 else "No Match")
-        }
+        return self.compare_embedding(result["embedding"], candidate_embeddings)

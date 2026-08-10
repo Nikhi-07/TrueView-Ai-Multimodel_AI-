@@ -55,24 +55,39 @@ const logUnifiedEvent = async (req, res, next) => {
       await session.save();
     }
 
-    // Record alerts if events present
+    // Record alerts if events present. Every transition event becomes one Alert
+    // record (the client already dedupes to state transitions, so no spam), with
+    // report-grade fields so the host's report timeline is meaningful.
     if (behaviour?.events && Array.isArray(behaviour.events)) {
       for (const evt of behaviour.events) {
-        const severity = evt.severity === 'CRITICAL' ? 'danger' : evt.severity === 'HIGH' ? 'warning' : 'info';
-        
+        // Canonical severity vocabulary (matches the Proctor Room socket alerts
+        // and the Report model): CRITICAL | HIGH | MEDIUM | LOW | INFO.
+        const severity = evt.severity === 'CRITICAL' || evt.severity === 'HIGH'
+          ? evt.severity
+          : evt.severity === 'MEDIUM'
+            ? 'MEDIUM'
+            : evt.state === 'RESOLVED' || evt.severity === 'LOW'
+              ? 'LOW'
+              : 'INFO';
+
         await Alert.create({
           sessionId: session_id,
+          participantId: user_id,
           userName: session.userName,
           userEmail: session.userEmail,
           type: evt.type,
-          severity: severity,
+          eventType: evt.type,
+          severity,
+          confidence: Number(evt.confidence) || 0.85,
           evidence: evt.evidence || `Event triggered: ${evt.type}`,
-          timestamp: new Date(),
+          // RESOLVED (CLEARED) lifecycle events are recorded as informational.
+          status: evt.state === 'RESOLVED' ? 'RESOLVED' : 'OPEN',
+          timestamp: evt.timestamp ? new Date(evt.timestamp) : new Date(),
         });
 
         session.totalAlerts += 1;
-        await session.save();
       }
+      await session.save();
     }
 
     res.json({

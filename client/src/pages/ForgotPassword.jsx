@@ -20,7 +20,10 @@ export default function ForgotPassword() {
     try {
       const res = await forgotPassword(email);
       setIsSent(true);
-      if (res.resetToken) setDevToken(res.resetToken); // Display token to test flow easily
+      // DEVELOPMENT ONLY: without a real email provider the reset token is
+      // surfaced so the flow can be tested locally. It is never shown in
+      // production builds (import.meta.env.DEV is false there).
+      if (res.resetToken && import.meta.env.DEV) setDevToken(res.resetToken);
     } catch (error) {
       // Error handled by toast
     } finally {
@@ -40,8 +43,8 @@ export default function ForgotPassword() {
           <span className="font-medium text-gray-300">{email}</span>
         </p>
         
-        {/* DEVELOPMENT ONLY helper */}
-        {devToken && (
+        {/* DEVELOPMENT ONLY helper (never rendered in production builds) */}
+        {devToken && import.meta.env.DEV && (
            <div className="mb-6 p-3 rounded-lg bg-surface-800 border border-warning-500/30 text-left">
              <p className="text-[10px] text-warning-400 font-bold mb-1 uppercase tracking-wider">Development Helper</p>
              <p className="text-xs text-gray-400 mb-2">Since we don't have real email configured, use this link to test reset:</p>
