@@ -25,9 +25,10 @@ const CameraFeed = forwardRef(function CameraFeed({ onDetectionUpdate, isActive:
     return canvas.toDataURL('image/jpeg', 0.7);
   }, [isCameraActive]);
 
-  // Expose captureFrameBase64 to parent via ref
+  // Expose captureFrameBase64 and active MediaStream to parent via ref
   useImperativeHandle(ref, () => ({
-    captureFrameBase64
+    captureFrameBase64,
+    getStream: () => streamRef.current
   }), [captureFrameBase64]);
 
   // Start camera

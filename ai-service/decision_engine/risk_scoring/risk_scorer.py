@@ -9,7 +9,7 @@ Maintains a rolling 0–100 risk score that:
 """
 
 import time
-from decision_engine.utils.constants import VIOLATION_WEIGHTS, RISK_DECAY_RATE
+from decision_engine.utils.constants import VIOLATION_WEIGHTS, RISK_DECAY_RATE, get_mode_profile
 
 
 class RiskScorer:
@@ -22,13 +22,14 @@ class RiskScorer:
         self._score_history: list[dict] = []              # {ts, score}
 
     # ── public API ────────────────────────────
-    def update(self, active_violations: list[str]) -> float:
+    def update(self, active_violations: list[str], mode: str = "EXAM") -> float:
         """
         Call once per evaluation frame.
 
         Args:
             active_violations: list of violation keys currently active
                                (e.g. ["phone_detected", "looking_away"])
+            mode: Session mode ("EXAM", "INTERVIEW", "ONLINE_CLASS", "MEETING", "WORKPLACE")
 
         Returns:
             Updated risk score (0–100).
@@ -36,6 +37,9 @@ class RiskScorer:
         now = time.time()
         dt = min(max(now - self._last_ts, 0.01), 2.0)  # clamp dt to avoid jumps
         self._last_ts = now
+
+        profile = get_mode_profile(mode)
+        mode_weights = profile.get("weights", VIOLATION_WEIGHTS)
 
         # 1. ALWAYS apply decay first (continuous recovery toward 0)
         decay = RISK_DECAY_RATE * dt
@@ -61,7 +65,7 @@ class RiskScorer:
             start = self._active_violations.get(v, now)
             duration = now - start
             if duration >= GRACE_PERIOD:
-                weight = VIOLATION_WEIGHTS.get(v, 1.0)
+                weight = mode_weights.get(v, 1.0)
                 risk_delta += weight * dt
 
         self._score = min(100.0, self._score + risk_delta)

@@ -5,6 +5,12 @@ Provides real-time AI processing pipelines.
 
 import os
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from face_detection.router import router as face_detection_router

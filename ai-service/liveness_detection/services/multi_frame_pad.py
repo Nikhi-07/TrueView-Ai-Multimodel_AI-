@@ -2,7 +2,7 @@
 Multi-Frame Presentation Attack Detector (PAD) – TrueView AI
 
 Integrates:
-1. MiniFASNetV2 Anti-Spoofing Model (Printed Photo, Phone Screen, Monitor Display, Video Replay)
+1. ConvNeXt-Tiny Multi-Task Anti-Spoofing Model (Production Run 04, tau = 0.31)
 2. MediaPipe Face Landmarker Blendshape Temporal Blink Detector (eyeBlinkLeft, eyeBlinkRight)
 """
 
@@ -12,25 +12,28 @@ import base64
 import time
 import os
 import random
-from ..mini_fasnet.anti_spoof import MiniFASNetAntiSpoof
+from collections import Counter
+from ..convnext.anti_spoof import ConvNeXtAntiSpoof
 from ..blink_detector import MediaPipeBlendshapeBlinkDetector
 
 class MultiFramePAD:
-    def __init__(self, liveness_threshold: float = 0.50):
-        self.liveness_threshold = liveness_threshold
-        self.anti_spoof_engine = MiniFASNetAntiSpoof(threshold=liveness_threshold)
+    def __init__(self, liveness_threshold: float = 0.31):
+        self.liveness_threshold = float(liveness_threshold)
+        self.anti_spoof_engine = ConvNeXtAntiSpoof(threshold=self.liveness_threshold)
         
         base_dir = os.path.dirname(os.path.abspath(__file__))
         yunet_path = os.path.abspath(os.path.join(base_dir, "..", "..", "face_detection", "models", "face_detection_yunet_2023mar.onnx"))
 
-        self.face_detector = cv2.FaceDetectorYN.create(
-            model=yunet_path,
-            config="",
-            input_size=(320, 320),
-            score_threshold=0.5,
-            nms_threshold=0.3,
-            top_k=5000
-        )
+        self.face_detector = None
+        if os.path.exists(yunet_path):
+            self.face_detector = cv2.FaceDetectorYN.create(
+                model=yunet_path,
+                config="",
+                input_size=(320, 320),
+                score_threshold=0.5,
+                nms_threshold=0.3,
+                top_k=5000
+            )
 
     def generate_random_challenge(self) -> dict:
         challenges = [
@@ -68,9 +71,8 @@ class MultiFramePAD:
         eye_blink_right: list = None
     ) -> dict:
         """
-        Analyze a temporal sequence of base64 frames for presentation attacks using MiniFASNetV2
-        and MediaPipe blendshape blink detector (blendshape arrays are supplied by the client-side
-        MediaPipe Face Landmarker when available).
+        Analyze a temporal sequence of base64 frames for presentation attacks using ConvNeXt-Tiny
+        Multi-Task Dual-Head Model and MediaPipe blendshape blink detector.
         """
         start_time = time.time()
 
@@ -101,28 +103,46 @@ class MultiFramePAD:
             }
 
         anti_spoof_scores = []
-        is_any_photo_spoof = False
-        is_any_screen_spoof = False
+        p_spoof_scores = []
+        spoof_attacks = []
+        live_frames_count = 0
+        total_frames = len(decoded_frames)
 
         for frame in decoded_frames:
             res = self.anti_spoof_engine.analyze_frame(frame)
             score = res.get("score", 0.0)
+            p_spoof = res.get("p_spoof", 1.0)
+            status = res.get("status", "SPOOF")
+            attack_type = res.get("attack_type", "NONE")
+
             anti_spoof_scores.append(score)
-            if res.get("status") == "SPOOF":
-                msg_lower = res.get("message", "").lower()
-                if "photo" in msg_lower or "paper" in msg_lower:
-                    is_any_photo_spoof = True
-                elif "screen" in msg_lower or "display" in msg_lower:
-                    is_any_screen_spoof = True
+            p_spoof_scores.append(p_spoof)
+
+            if status == "LIVE" and p_spoof < self.liveness_threshold:
+                live_frames_count += 1
+            else:
+                if attack_type != "NONE" and attack_type != "real":
+                    spoof_attacks.append(attack_type)
 
         avg_anti_spoof_score = float(np.mean(anti_spoof_scores))
-        is_live = bool(avg_anti_spoof_score >= self.liveness_threshold and not is_any_photo_spoof and not is_any_screen_spoof)
+        median_p_spoof = float(np.median(p_spoof_scores))
+        avg_p_spoof = float(np.mean(p_spoof_scores))
+        live_ratio = live_frames_count / max(1, total_frames)
 
-        # ── Temporal blink analysis from client MediaPipe blendshapes (supplementary, not the sole liveness signal) ──
+        # Strategy D: Consensual Majority & Median Protection
+        # 1. At least 66% (e.g. 4/6 or 2/3) of frames must individually pass as LIVE
+        # 2. Median P(Spoof) across the sequence must be below threshold (0.31)
+        # 3. Mean P(Spoof) must be below 0.39 (preventing extreme spoof outliers from passing)
+        is_live = bool(
+            live_ratio >= 0.66 and
+            median_p_spoof < self.liveness_threshold and
+            avg_p_spoof < (self.liveness_threshold + 0.08)
+        )
+
+        # ── Temporal blink analysis from client MediaPipe blendshapes (supplementary) ──
         blink_stats = {"detected": False, "count": 0, "state": "OPEN"}
         try:
             if eye_blink_left and eye_blink_right and len(eye_blink_left) == len(eye_blink_right) and len(eye_blink_left) > 0:
-                from ..blink_detector import MediaPipeBlendshapeBlinkDetector
                 blink_detector = MediaPipeBlendshapeBlinkDetector()
                 for bl, br in zip(eye_blink_left, eye_blink_right):
                     res = blink_detector.process_blendshapes(bl, br)
@@ -138,12 +158,27 @@ class MultiFramePAD:
 
         spoof_type = "NONE"
         if not is_live:
-            if is_any_photo_spoof:
-                spoof_type = "PRINTED_PHOTO"
-                message = "Presentation attack detected (Printed Photograph). Live human face required."
-            elif is_any_screen_spoof:
-                spoof_type = "PHONE_SCREEN"
-                message = "Presentation attack detected (Phone / Monitor Display Replay). Live human face required."
+            # Determine majority attack classification among spoof frames
+            if spoof_attacks:
+                attack_counts = Counter(spoof_attacks)
+                dominant_attack, dominant_count = attack_counts.most_common(1)[0]
+                # Require majority consensus (>= 50% of detected spoof tags) for specific subtype attribution
+                if dominant_count >= (len(spoof_attacks) / 2):
+                    if "print" in dominant_attack:
+                        spoof_type = "PRINTED_PHOTO"
+                        message = "Presentation attack detected (Printed Photograph). Live human face required."
+                    elif "screen" in dominant_attack or "replay" in dominant_attack:
+                        spoof_type = "PHONE_SCREEN"
+                        message = "Presentation attack detected (Phone / Monitor Display Replay). Live human face required."
+                    elif "mask" in dominant_attack:
+                        spoof_type = "MASK_ATTACK"
+                        message = "Presentation attack detected (3D Mask / Physical Disguise). Live human face required."
+                    else:
+                        spoof_type = "SPOOF_ATTACK"
+                        message = "Face anti-spoofing verification failed. Presentation attack detected."
+                else:
+                    spoof_type = "SPOOF_ATTACK"
+                    message = "Face anti-spoofing verification failed. Presentation attack detected."
             else:
                 spoof_type = "SPOOF_ATTACK"
                 message = "Face anti-spoofing verification failed. Presentation attack detected."

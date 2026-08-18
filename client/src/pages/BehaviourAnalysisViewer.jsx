@@ -202,7 +202,13 @@ export default function BehaviourAnalysisViewer() {
 
       try {
         // Run AI telemetry requests in parallel to avoid queue delays
-        const [gazeRes, poseRes, yoloRes] = await Promise.all([
+        const [livenessRes, gazeRes, poseRes, yoloRes] = await Promise.all([
+          fetch('/ai-api/liveness/detect-liveness', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: frame })
+          }).then(r => r.json()).catch(() => ({})),
+
           fetch('/ai-api/eye-gaze/process-eye-gaze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -224,11 +230,14 @@ export default function BehaviourAnalysisViewer() {
 
         if (!active) return;
 
-        // Consolidate telemetries
+        // Consolidate telemetries with real ConvNeXt Run 04 liveness
+        const isLive = livenessRes.is_live ?? (livenessRes.status === 'LIVE' || (livenessRes.p_spoof !== undefined && livenessRes.p_spoof < 0.31));
+        const faceDetected = livenessRes.face?.detected ?? (gazeRes.face_detected || poseRes.face_detected || false);
+
         const telemetry = {
-          face_detected: gazeRes.face_detected || poseRes.face_detected || false,
-          identity: gazeRes.face_detected ? "verified_candidate" : "unknown",
-          is_live: gazeRes.is_live ?? true,
+          face_detected: faceDetected,
+          identity: faceDetected ? "verified_candidate" : "unknown",
+          is_live: isLive,
           gaze_direction: gazeRes.gaze_direction || "center",
           head_pose_yaw: poseRes.yaw || 0.0,
           head_pose_pitch: poseRes.pitch || 0.0,

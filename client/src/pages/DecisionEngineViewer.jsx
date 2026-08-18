@@ -287,7 +287,12 @@ export default function DecisionEngineViewer() {
 
       try {
         // 1. Run all AI pipelines in parallel
-        const [gazeRes, poseRes, yoloRes] = await Promise.all([
+        const [livenessRes, gazeRes, poseRes, yoloRes] = await Promise.all([
+          fetch('/ai-api/liveness/detect-liveness', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: frame })
+          }).then(r => r.json()).catch(() => ({})),
+
           fetch('/ai-api/eye-gaze/process-eye-gaze', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ image: frame, draw_overlay: false })
@@ -306,16 +311,17 @@ export default function DecisionEngineViewer() {
 
         if (!active) return;
 
-        // 2. Build consolidated telemetry payload for Decision Engine
+        // 2. Build consolidated telemetry payload for Decision Engine with real ConvNeXt signals
         const voiceIsSpeaking = currentVoiceStatus.current === 'speaking';
-        const personCount = yoloRes.summary?.person_count ?? (gazeRes.face_detected || poseRes.face_detected ? 1 : 0);
-        const faceDetected = gazeRes.face_detected ?? poseRes.face_detected ?? false;
+        const isSpoof = livenessRes.is_live === false || livenessRes.status === 'SPOOF' || (livenessRes.p_spoof !== undefined && livenessRes.p_spoof >= 0.31);
+        const faceDetected = livenessRes.face?.detected ?? (gazeRes.face_detected ?? poseRes.face_detected ?? false);
+        const personCount = yoloRes.summary?.person_count ?? (faceDetected ? 1 : 0);
 
         const telemetry = {
           // Face
           face_detected: faceDetected,
           face_match: faceDetected ? true : null,
-          face_confidence: gazeRes.confidence ?? poseRes.confidence ?? 0.9,
+          face_confidence: livenessRes.score ?? (gazeRes.confidence ?? poseRes.confidence ?? 0.9),
           // Gaze
           gaze_status: gazeRes.gaze_direction || gazeRes.status || 'center',
           gaze_confidence: gazeRes.confidence ?? 0.85,
@@ -334,8 +340,11 @@ export default function DecisionEngineViewer() {
           person_count:   personCount,
           yolo_confidence: yoloRes.summary?.avg_confidence ?? 0.9,
           detected_objects: yoloRes.detections || [],
-          // Derived
-          is_spoof: false,
+          // Liveness & Anti-Spoof (ConvNeXt-Tiny Run 04)
+          is_spoof: isSpoof,
+          p_spoof: livenessRes.p_spoof !== undefined ? livenessRes.p_spoof : (isSpoof ? 0.95 : 0.05),
+          p_real: livenessRes.p_real !== undefined ? livenessRes.p_real : (livenessRes.score ?? 0.95),
+          attack_type: livenessRes.attack_type || 'NONE',
           user_absent: !faceDetected && personCount === 0,
           behaviour_confidence: 0.9,
         };

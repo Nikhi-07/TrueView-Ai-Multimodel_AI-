@@ -2,7 +2,7 @@
 Unified Liveness & Anti-Spoofing Service Router Engine – TrueView AI
 
 Combines:
-1. MiniFASNetV2 Presentation Attack Detector (Printed Photo, Screen Replay, Video Replay)
+1. ConvNeXt-Tiny Multi-Task Anti-Spoofing Model (Production Run 04, tau = 0.31)
 2. MediaPipe Face Landmarker Blendshape Temporal Blink Detector (eyeBlinkLeft, eyeBlinkRight)
 3. YuNet Face Box Detector
 """
@@ -11,12 +11,12 @@ import cv2
 import numpy as np
 import base64
 import time
-from .mini_fasnet.anti_spoof import MiniFASNetAntiSpoof
+from .convnext.anti_spoof import ConvNeXtAntiSpoof
 from .blink_detector import MediaPipeBlendshapeBlinkDetector
 
 class LivenessService:
-    def __init__(self):
-        self.anti_spoof_engine = MiniFASNetAntiSpoof(threshold=0.75)
+    def __init__(self, threshold: float = 0.31):
+        self.anti_spoof_engine = ConvNeXtAntiSpoof(threshold=threshold)
         self.blink_detectors = {} # Session ID -> MediaPipeBlendshapeBlinkDetector
 
     def get_blink_detector(self, session_id: str) -> MediaPipeBlendshapeBlinkDetector:
@@ -49,10 +49,10 @@ class LivenessService:
         face_box: dict = None
     ) -> dict:
         """
-        Evaluates single camera frame with MiniFASNet anti-spoofing + MediaPipe blendshape blink detector.
+        Evaluates single camera frame with ConvNeXt-Tiny anti-spoofing + MediaPipe blendshape blink detector.
         Returns standardized model output:
         {
-            "antiSpoof": { "status": "LIVE", "score": 0.96 },
+            "antiSpoof": { "status": "LIVE", "score": 0.98, "is_live": true, "attack_type": "NONE" },
             "blink": { "detected": true, "count": 1, "state": "OPEN" },
             "face": { "detected": true, "count": 1 }
         }
@@ -60,12 +60,22 @@ class LivenessService:
         frame = self.decode_base64_image(image_b64)
         if frame is None:
             return {
-                "antiSpoof": { "status": "SPOOF", "score": 0.0, "message": "Failed to decode camera frame" },
-                "blink": { "detected": False, "count": 0, "state": "OPEN" },
+                "antiSpoof": {
+                    "status": "SPOOF",
+                    "score": 0.0,
+                    "is_live": False,
+                    "message": "Failed to decode camera frame",
+                    "model": "convnext-tiny-run04",
+                    "model_source": "no input frame",
+                    "attack_type": "UNKNOWN",
+                    "p_spoof": 1.0,
+                    "attack_probs": [0.0] * 5
+                },
+                "blink": { "detected": False, "count": 0, "state": "OPEN", "eye_blink_avg": 0.0 },
                 "face": { "detected": False, "count": 0 }
             }
 
-        # 1. MiniFASNet Anti-Spoofing Inference
+        # 1. ConvNeXt-Tiny Anti-Spoofing Inference
         anti_spoof_res = self.anti_spoof_engine.analyze_frame(frame, face_box)
 
         # 2. MediaPipe Blendshape Blink Tracking
@@ -94,9 +104,13 @@ class LivenessService:
                 "score": anti_spoof_res["score"],
                 "is_live": anti_spoof_res["is_live"],
                 "message": anti_spoof_res["message"],
-                "model": anti_spoof_res.get("model", "unknown"),
+                "model": anti_spoof_res.get("model", "convnext-tiny-run04"),
                 "model_source": anti_spoof_res.get("model_source"),
-                "attack_probs": anti_spoof_res.get("attack_probs")
+                "attack_type": anti_spoof_res.get("attack_type", "NONE"),
+                "p_spoof": anti_spoof_res.get("p_spoof", 0.0),
+                "threshold": anti_spoof_res.get("threshold", 0.31),
+                "attack_probs": anti_spoof_res.get("attack_probs", []),
+                "binary_probs": anti_spoof_res.get("binary_probs", [])
             },
             "blink": {
                 "detected": blink_res["detected"],

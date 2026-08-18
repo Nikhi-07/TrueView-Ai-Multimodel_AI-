@@ -3,13 +3,9 @@ import { io } from 'socket.io-client';
 
 // Socket.IO server URL resolution:
 //   1. Explicit VITE_SOCKET_URL env var (production/deployed setups)
-//   2. Same-origin in production builds
-//   3. Vite dev proxy (empty string) or localhost:5000 fallback in development
-const SOCKET_URL =
-  import.meta.env.VITE_SOCKET_URL ||
-  (import.meta.env.PROD
-    ? window.location.origin
-    : (window.location.origin.includes('5173') ? '' : 'http://localhost:5000'));
+//   2. Empty string '' (same-origin relative URL) so Socket.IO connects via the current
+//      browser origin through the Vite /socket.io proxy in dev or reverse-proxy in prod.
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || '';
 
 export default function useProctorSocket({ sessionId, role = 'participant', user, sessionType, sessionDuration }) {
   const [isConnected, setIsConnected] = useState(false);

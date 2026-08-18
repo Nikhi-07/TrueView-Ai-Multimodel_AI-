@@ -53,8 +53,8 @@ _RULE_TABLE: list[dict] = [
         "id": "spoof_attempt",
         "label": "Spoof / Liveness Failure",
         "severity": "CRITICAL",
-        "condition": lambda d: d.get("is_spoof") is True,
-        "reason": lambda d: "Liveness check indicates a potential spoof attempt.",
+        "condition": lambda d: d.get("is_spoof") is True or (d.get("p_spoof") is not None and float(d.get("p_spoof", 0.0)) >= 0.31),
+        "reason": lambda d: f"Presentation attack detected: {d.get('attack_type')} (P_spoof: {float(d.get('p_spoof', 1.0)):.2f})." if d.get("attack_type") and d.get("attack_type") != "NONE" else "Liveness check indicates a potential spoof attempt.",
     },
     {
         "id": "unknown_face",
@@ -111,6 +111,9 @@ _RULE_TABLE: list[dict] = [
 ]
 
 
+from decision_engine.utils.constants import VIOLATION_WEIGHTS, get_mode_profile
+
+
 class RuleEngine:
     """Evaluate telemetry data against the rule table."""
 
@@ -119,26 +122,44 @@ class RuleEngine:
 
     def evaluate(self, telemetry: dict) -> list[ViolationResult]:
         """
-        Evaluate all rules against the provided telemetry snapshot.
+        Evaluate all rules against the provided telemetry snapshot and active mode.
 
         Args:
             telemetry: dict with keys like face_detected, gaze_status,
-                       phone_detected, person_count, etc.
+                       phone_detected, person_count, mode, etc.
 
         Returns:
             List of ViolationResult for every triggered rule.
         """
+        mode = telemetry.get("mode") or telemetry.get("session_mode") or telemetry.get("session_type") or "EXAM"
+        profile = get_mode_profile(mode)
+        mode_weights = profile.get("weights", VIOLATION_WEIGHTS)
+
         violations: list[ViolationResult] = []
         for rule in self._rules:
             try:
+                rule_id = rule["id"]
+
+                # Check mode allowances
+                if rule_id == "speaking_detected" and profile.get("speaking_allowed"):
+                    continue
+                if rule_id == "phone_detected" and profile.get("phone_allowed"):
+                    continue
+                if rule_id == "multiple_persons" and profile.get("multi_person_allowed"):
+                    continue
+                if rule_id in ("looking_away", "frequent_head_turning") and not profile.get("gaze_monitoring", True):
+                    continue
+
                 if rule["condition"](telemetry):
-                    violations.append(ViolationResult(
-                        rule_id=rule["id"],
-                        label=rule["label"],
-                        severity=rule["severity"],
-                        weight=VIOLATION_WEIGHTS.get(rule["id"], 1.0),
-                        reason=rule["reason"](telemetry),
-                    ))
+                    w = mode_weights.get(rule_id, 1.0)
+                    if w > 0:
+                        violations.append(ViolationResult(
+                            rule_id=rule_id,
+                            label=rule["label"],
+                            severity=rule["severity"],
+                            weight=w,
+                            reason=rule["reason"](telemetry),
+                        ))
             except Exception:
                 # Silently skip malformed rules to avoid pipeline crash
                 continue

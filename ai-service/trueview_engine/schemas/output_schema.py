@@ -34,11 +34,18 @@ class IdentityStatus(BaseModel):
 
 
 class LivenessStatus(BaseModel):
-    status: str = "live"                # live | fake | checking | unknown
+    status: str = "live"                # live | fake | checking | unknown | spoof
     confidence: float = 0.95
     passive_confidence: float = 0.95
     active_challenge_required: bool = False
     active_challenge_type: Optional[str] = None # BLINK_TWICE | TURN_HEAD_LEFT | TURN_HEAD_RIGHT
+    is_live: Optional[bool] = True
+    liveness_status: Optional[str] = "LIVE"
+    liveness_score: Optional[float] = 0.95
+    p_real: Optional[float] = 0.95
+    p_spoof: Optional[float] = 0.05
+    attack_type: Optional[str] = "NONE"
+    model: Optional[str] = "convnext-tiny-run04"
 
 
 class AttentionStatus(BaseModel):

@@ -60,10 +60,32 @@ export const SESSION_POLICIES = {
     rules: {
       facePresence: { required: true, severityOnAbsence: 'LOW' },
       identityVerification: { required: false, severityOnMismatch: 'INFO' },
-      livenessCheck: { required: false, severityOnFail: 'INFO' },
+      livenessCheck: { required: true, severityOnFail: 'HIGH' },
       multipleFaces: { allowed: true, severity: 'INFO' },
       gazeDeviation: { allowed: true, thresholdSec: 15.0, severity: 'INFO' },
-      phoneDetection: { allowed: true, severity: 'INFO' },
+      phoneDetection: { allowed: true, severity: 'LOW' },
+      unauthorizedObjects: { allowed: true, severity: 'INFO' },
+      voiceActivity: { allowed: true, severity: 'INFO' },
+      unknownSpeaker: { allowed: true, severity: 'INFO' },
+      cameraInterruption: { action: 'WARN_PARTICIPANT', severity: 'MEDIUM' },
+      microphoneInterruption: { action: 'WARN_PARTICIPANT', severity: 'MEDIUM' },
+    }
+  },
+  ONLINE_CLASS: {
+    id: 'ONLINE_CLASS',
+    name: 'Online Class Mode',
+    strictness: 'PERMISSIVE',
+    description: 'Tracks presence, participation, and technical status. Ignores gaze deviation and note taking.',
+    warningLimit: 15,
+    criticalLimit: 10,
+    suspensionLimit: 5,
+    rules: {
+      facePresence: { required: true, severityOnAbsence: 'LOW' },
+      identityVerification: { required: false, severityOnMismatch: 'INFO' },
+      livenessCheck: { required: true, severityOnFail: 'HIGH' },
+      multipleFaces: { allowed: true, severity: 'INFO' },
+      gazeDeviation: { allowed: true, thresholdSec: 15.0, severity: 'INFO' },
+      phoneDetection: { allowed: true, severity: 'LOW' },
       unauthorizedObjects: { allowed: true, severity: 'INFO' },
       voiceActivity: { allowed: true, severity: 'INFO' },
       unknownSpeaker: { allowed: true, severity: 'INFO' },
@@ -91,6 +113,28 @@ export const SESSION_POLICIES = {
       unknownSpeaker: { allowed: true, severity: 'INFO' },
       cameraInterruption: { action: 'NOTIFY_ONLY', severity: 'LOW' },
       microphoneInterruption: { action: 'NOTIFY_ONLY', severity: 'LOW' },
+    }
+  },
+  WORKPLACE: {
+    id: 'WORKPLACE',
+    name: 'Workplace Mode',
+    strictness: 'MONITORED',
+    description: 'Productivity monitoring with identity presence check and phone detection.',
+    warningLimit: 10,
+    criticalLimit: 5,
+    suspensionLimit: 3,
+    rules: {
+      facePresence: { required: true, severityOnAbsence: 'MEDIUM' },
+      identityVerification: { required: true, severityOnMismatch: 'HIGH' },
+      livenessCheck: { required: true, severityOnFail: 'HIGH' },
+      multipleFaces: { allowed: true, severity: 'LOW' },
+      gazeDeviation: { allowed: true, thresholdSec: 15.0, severity: 'INFO' },
+      phoneDetection: { allowed: false, severity: 'MEDIUM' },
+      unauthorizedObjects: { allowed: false, severity: 'MEDIUM' },
+      voiceActivity: { allowed: true, severity: 'INFO' },
+      unknownSpeaker: { allowed: true, severity: 'INFO' },
+      cameraInterruption: { action: 'NOTIFY_AND_PAUSE', severity: 'MEDIUM' },
+      microphoneInterruption: { action: 'NOTIFY_AND_PAUSE', severity: 'MEDIUM' },
     }
   }
 };

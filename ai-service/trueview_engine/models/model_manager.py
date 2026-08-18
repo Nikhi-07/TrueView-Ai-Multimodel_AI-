@@ -82,15 +82,23 @@ class ModelManager:
             self.recognition_service = None
             self.health_status["face_recognition"] = "FAILED"
 
-        # 3. Liveness Detector
+        # 3. Liveness Detector (ConvNeXt-Tiny Run 04 with Strategy D & Fallback)
         try:
-            self.liveness_service = LivenessPipeline()
+            from liveness_detection.convnext.anti_spoof import ConvNeXtAntiSpoof
+            self.liveness_service = ConvNeXtAntiSpoof(threshold=0.31)
             self.health_status["liveness"] = "READY"
-            print("[ModelManager] [OK] Liveness Detector loaded.")
+            print("[ModelManager] [OK] ConvNeXt-Tiny Run 04 Anti-Spoofing Service loaded.")
         except Exception as e:
-            print(f"[ModelManager] [WARN] Liveness Detector failed to load: {e}")
-            self.liveness_service = None
-            self.health_status["liveness"] = "FAILED"
+            print(f"[ModelManager] [WARN] ConvNeXt Liveness Detector failed to load: {e}")
+            try:
+                from liveness_detection.services.liveness_pipeline import LivenessPipeline
+                self.liveness_service = LivenessPipeline()
+                self.health_status["liveness"] = "DEGRADED"
+                print("[ModelManager] [ROLLBACK] Fallback heuristic LivenessPipeline loaded.")
+            except Exception as e_fallback:
+                print(f"[ModelManager] [ERROR] Fallback Liveness failed: {e_fallback}")
+                self.liveness_service = None
+                self.health_status["liveness"] = "FAILED"
 
         # 4. Gaze Tracker
         try:

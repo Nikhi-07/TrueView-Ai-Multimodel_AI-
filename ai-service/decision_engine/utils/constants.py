@@ -41,20 +41,169 @@ ACTION_FLAG          = "FLAG_FOR_REVIEW"
 ACTION_SUSPEND       = "SUSPEND_SESSION"
 
 # ──────────────────────────────────────────────
-# Per-Violation Risk Weights (points added per second of violation)
-# Higher weight = faster risk climb
+# Centralized Mode Profiles & Strictness Config
 # ──────────────────────────────────────────────
-VIOLATION_WEIGHTS = {
-    "phone_detected":         8.0,   # Critical – rapid escalation
-    "multiple_persons":       7.0,   # Critical
-    "spoof_attempt":         12.0,   # Highest – immediate critical
-    "unknown_face":           6.0,   # High
-    "no_face":                4.0,   # Medium
-    "looking_away":           2.5,   # Moderate
-    "frequent_head_turning":  2.0,   # Moderate
-    "speaking_detected":      1.5,   # Low-moderate
-    "user_left_camera":       5.0,   # High
+MODE_PROFILES = {
+    "EXAM": {
+        "strictness": "STRICT",
+        "liveness_required": True,
+        "face_required": True,
+        "multiple_face_detection": True,
+        "phone_detection": True,
+        "object_detection": True,
+        "gaze_monitoring": True,
+        "head_pose_monitoring": True,
+        "voice_monitoring": True,
+        "prolonged_distraction": True,
+        "suspicious_behavior": True,
+        "spoof_detection": True,
+        "auto_flag": True,
+        "auto_suspend": True,
+        "high_risk_threshold": 80.0,
+        "speaking_allowed": False,
+        "multi_person_allowed": False,
+        "weights": {
+            "phone_detected": 15.0,
+            "multiple_persons": 12.0,
+            "spoof_attempt": 15.0,
+            "unknown_face": 8.0,
+            "no_face": 5.0,
+            "looking_away": 3.0,
+            "frequent_head_turning": 2.5,
+            "speaking_detected": 8.0,
+            "user_left_camera": 6.0,
+        }
+    },
+    "INTERVIEW": {
+        "strictness": "MODERATE",
+        "liveness_required": True,
+        "face_required": True,
+        "multiple_face_detection": True,
+        "phone_detection": True,
+        "object_detection": True,
+        "gaze_monitoring": True,
+        "head_pose_monitoring": True,
+        "voice_monitoring": True,
+        "prolonged_distraction": True,
+        "suspicious_behavior": True,
+        "spoof_detection": True,
+        "auto_flag": True,
+        "auto_suspend": False,
+        "high_risk_threshold": 85.0,
+        "speaking_allowed": True,
+        "multi_person_allowed": False,
+        "weights": {
+            "phone_detected": 8.0,
+            "multiple_persons": 6.0,
+            "spoof_attempt": 12.0,
+            "unknown_face": 6.0,
+            "no_face": 4.0,
+            "looking_away": 0.5,
+            "frequent_head_turning": 0.5,
+            "speaking_detected": 0.0,
+            "user_left_camera": 4.0,
+        }
+    },
+    "ONLINE_CLASS": {
+        "strictness": "RELAXED",
+        "liveness_required": True,
+        "face_required": True,
+        "multiple_face_detection": True,
+        "phone_detection": True,
+        "object_detection": True,
+        "gaze_monitoring": False,
+        "head_pose_monitoring": False,
+        "voice_monitoring": False,
+        "prolonged_distraction": False,
+        "suspicious_behavior": True,
+        "spoof_detection": True,
+        "auto_flag": False,
+        "auto_suspend": False,
+        "high_risk_threshold": 90.0,
+        "speaking_allowed": True,
+        "multi_person_allowed": True,
+        "weights": {
+            "phone_detected": 2.0,
+            "multiple_persons": 0.0,
+            "spoof_attempt": 10.0,
+            "unknown_face": 3.0,
+            "no_face": 2.0,
+            "looking_away": 0.2,
+            "frequent_head_turning": 0.1,
+            "speaking_detected": 0.0,
+            "user_left_camera": 2.0,
+        }
+    },
+    "MEETING": {
+        "strictness": "MINIMAL",
+        "liveness_required": True,
+        "face_required": True,
+        "multiple_face_detection": False,
+        "phone_detection": False,
+        "object_detection": False,
+        "gaze_monitoring": False,
+        "head_pose_monitoring": False,
+        "voice_monitoring": False,
+        "prolonged_distraction": False,
+        "suspicious_behavior": False,
+        "spoof_detection": True,
+        "auto_flag": False,
+        "auto_suspend": False,
+        "high_risk_threshold": 95.0,
+        "speaking_allowed": True,
+        "multi_person_allowed": True,
+        "weights": {
+            "phone_detected": 0.0,
+            "multiple_persons": 0.0,
+            "spoof_attempt": 8.0,
+            "unknown_face": 2.0,
+            "no_face": 1.0,
+            "looking_away": 0.0,
+            "frequent_head_turning": 0.0,
+            "speaking_detected": 0.0,
+            "user_left_camera": 1.0,
+        }
+    },
+    "WORKPLACE": {
+        "strictness": "MONITORED",
+        "liveness_required": True,
+        "face_required": True,
+        "multiple_face_detection": True,
+        "phone_detection": True,
+        "object_detection": True,
+        "gaze_monitoring": False,
+        "head_pose_monitoring": False,
+        "voice_monitoring": False,
+        "prolonged_distraction": False,
+        "suspicious_behavior": True,
+        "spoof_detection": True,
+        "auto_flag": False,
+        "auto_suspend": False,
+        "high_risk_threshold": 90.0,
+        "speaking_allowed": True,
+        "multi_person_allowed": True,
+        "weights": {
+            "phone_detected": 5.0,
+            "multiple_persons": 1.0,
+            "spoof_attempt": 10.0,
+            "unknown_face": 4.0,
+            "no_face": 2.0,
+            "looking_away": 0.2,
+            "frequent_head_turning": 0.2,
+            "speaking_detected": 0.0,
+            "user_left_camera": 2.0,
+        }
+    }
 }
+# Alias CLASS to ONLINE_CLASS
+MODE_PROFILES["CLASS"] = MODE_PROFILES["ONLINE_CLASS"]
+
+def get_mode_profile(mode_name: str) -> dict:
+    key = (mode_name or "EXAM").upper().replace(" ", "_")
+    return MODE_PROFILES.get(key, MODE_PROFILES["EXAM"])
+
+# Default fallback weights (used when no mode is provided)
+VIOLATION_WEIGHTS = MODE_PROFILES["EXAM"]["weights"]
 
 # ──────────────────────────────────────────────
 # Risk Decay Rate (points recovered per second of clean behavior)

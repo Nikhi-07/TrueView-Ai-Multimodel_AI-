@@ -185,4 +185,23 @@ Desktop.ini
 *.ntvs*
 *.njsproj
 *.sln
-*.suo
+
+# ─────────────────────────────────────────────────────────────────────────
+# TrueView local recordings
+# ─────────────────────────────────────────────────────────────────────────
+server/uploads/
+server/uploads/recordings/
+uploads/
+*.webm
+*.mp4
+*.avi
+*.mkv
+
+# ─────────────────────────────────────────────────────────────────────────
+# TrueView temporary development files
+# ─────────────────────────────────────────────────────────────────────────
+ai-service/scratch/
+ai-service/_backup_before_convnext/
+audit_fast.py
+.freebuff/
+

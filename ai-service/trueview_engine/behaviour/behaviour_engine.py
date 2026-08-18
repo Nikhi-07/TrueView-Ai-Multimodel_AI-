@@ -146,6 +146,23 @@ class BehaviourEngine:
                 "state": speak_st.get("state", "CONFIRMED")
             })
 
+        # 6. Presentation Attack / Liveness Failure (ConvNeXt-Tiny Run 04)
+        liv_eval = fused_features.get("liveness", {})
+        if liv_eval.get("is_live") is False or liv_eval.get("status") in ("fake", "spoof"):
+            attack_type = liv_eval.get("attack_type", "NONE")
+            p_spoof = float(liv_eval.get("p_spoof", 0.95))
+            events.append({
+                "event_id": f"evt_{uuid.uuid4().hex[:8]}",
+                "session_id": session_id,
+                "timestamp": now_str,
+                "type": "SPOOF_DETECTED",
+                "severity": "CRITICAL",
+                "confidence": round(p_spoof, 4),
+                "duration": 1.0,
+                "evidence": f"Presentation attack detected ({attack_type}).",
+                "state": "CONFIRMED"
+            })
+
         # State classification
         if any(e["severity"] == "CRITICAL" for e in events):
             current_state = "critical_violation"

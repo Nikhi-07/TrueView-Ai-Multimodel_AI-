@@ -369,11 +369,18 @@ class TrueViewEngine:
             ),
 
             liveness=LivenessStatus(
-                status=liveness_eval["status"],
-                confidence=liveness_eval["confidence"],
-                passive_confidence=liveness_eval["passive_confidence"],
-                active_challenge_required=liveness_eval["active_challenge_required"],
-                active_challenge_type=liveness_eval["active_challenge_type"],
+                status=liveness_eval.get("status", "live"),
+                confidence=liveness_eval.get("confidence", 0.95),
+                passive_confidence=liveness_eval.get("passive_confidence", 0.95),
+                active_challenge_required=liveness_eval.get("active_challenge_required", False),
+                active_challenge_type=liveness_eval.get("active_challenge_type"),
+                is_live=liveness_eval.get("is_live", liveness_eval.get("status", "live").lower() == "live"),
+                liveness_status=liveness_eval.get("liveness_status", "LIVE"),
+                liveness_score=liveness_eval.get("liveness_score", liveness_eval.get("confidence", 0.95)),
+                p_real=liveness_eval.get("p_real", liveness_eval.get("confidence", 0.95)),
+                p_spoof=liveness_eval.get("p_spoof", round(1.0 - liveness_eval.get("confidence", 0.95), 4)),
+                attack_type=liveness_eval.get("attack_type", "NONE"),
+                model=liveness_eval.get("model", "convnext-tiny-run04"),
             ),
 
             attention=AttentionStatus(

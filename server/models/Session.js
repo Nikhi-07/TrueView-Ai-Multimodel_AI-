@@ -96,6 +96,34 @@ const sessionSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    roomId: {
+      type: String,
+      default: null,
+    },
+    roomTitle: {
+      type: String,
+      default: null,
+    },
+    recordingUrl: {
+      type: String,
+      default: null,
+    },
+    durationSeconds: {
+      type: Number,
+      default: 0,
+    },
+    overallIntegrityScore: {
+      type: Number,
+      default: 100,
+    },
+    timeline: [
+      {
+        timestamp: { type: Date, default: Date.now },
+        eventType: { type: String, default: 'EVENT' },
+        severity: { type: String, default: 'INFO' },
+        evidence: { type: String, default: '' },
+      }
+    ],
   },
   {
     timestamps: true,

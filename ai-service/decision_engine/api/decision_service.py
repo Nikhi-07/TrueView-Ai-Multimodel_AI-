@@ -43,13 +43,15 @@ class DecisionService:
         """
         self._eval_count += 1
 
+        mode = telemetry.get("mode") or telemetry.get("session_mode") or telemetry.get("session_type") or "EXAM"
+
         # 1. Rule evaluation → list of ViolationResult
         violations = self._rule_engine.evaluate(telemetry)
         violation_ids = [v.rule_id for v in violations]
 
         # DEBUG: Log every 20th frame so we can see what's triggering
         if self._eval_count % 20 == 0:
-            print(f"[Decision #{self._eval_count}] "
+            print(f"[Decision #{self._eval_count} Mode={mode}] "
                   f"face={telemetry.get('face_detected')}, "
                   f"gaze={telemetry.get('gaze_status')}, "
                   f"yaw={telemetry.get('head_yaw')}, "
@@ -60,8 +62,8 @@ class DecisionService:
                   f"absent={telemetry.get('user_absent')} "
                   f"→ violations={violation_ids}, score={self._risk_scorer.score}")
 
-        # 2. Update risk score
-        risk_score = self._risk_scorer.update(violation_ids)
+        # 2. Update risk score with mode-specific weights
+        risk_score = self._risk_scorer.update(violation_ids, mode=mode)
 
         # 3. Compute confidence
         conf = self._confidence.calculate(telemetry)
@@ -71,6 +73,7 @@ class DecisionService:
             risk_score=risk_score,
             violations=violations,
             confidence=conf["overall"],
+            mode=mode,
         )
 
         # 5. Enrich with additional metadata

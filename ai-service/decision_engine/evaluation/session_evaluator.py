@@ -10,17 +10,9 @@ from decision_engine.utils.constants import (
     STATUS_CLEAN, STATUS_UNDER_REVIEW, STATUS_FLAGGED, STATUS_SUSPENDED,
     ACTION_CONTINUE, ACTION_WARN, ACTION_FLAG, ACTION_SUSPEND,
     RISK_TIERS,
+    get_mode_profile
 )
 from decision_engine.rules.rule_engine import ViolationResult
-
-
-# Map session status → decision action
-_STATUS_ACTION_MAP = {
-    STATUS_CLEAN:        ACTION_CONTINUE,
-    STATUS_UNDER_REVIEW: ACTION_WARN,
-    STATUS_FLAGGED:      ACTION_FLAG,
-    STATUS_SUSPENDED:    ACTION_SUSPEND,
-}
 
 
 def _get_risk_tier(score: float) -> dict:
@@ -31,12 +23,19 @@ def _get_risk_tier(score: float) -> dict:
     return RISK_TIERS[-1]
 
 
-def _classify_status(score: float) -> str:
-    """Determine session status from current risk score."""
-    for status, (lo, hi) in STATUS_THRESHOLDS.items():
-        if lo <= score <= hi:
-            return status
-    return STATUS_SUSPENDED
+def _classify_status(score: float, mode: str = "EXAM") -> str:
+    """Determine session status from current risk score and mode."""
+    profile = get_mode_profile(mode)
+    high_threshold = profile.get("high_risk_threshold", 80.0)
+
+    if score <= 25:
+        return STATUS_CLEAN
+    elif score <= 55:
+        return STATUS_UNDER_REVIEW
+    elif score < high_threshold:
+        return STATUS_FLAGGED
+    else:
+        return STATUS_SUSPENDED if profile.get("auto_suspend", True) else STATUS_FLAGGED
 
 
 def _build_reasoning(violations: list[ViolationResult], score: float) -> str:
@@ -74,25 +73,26 @@ class SessionEvaluator:
         risk_score: float,
         violations: list[ViolationResult],
         confidence: float,
+        mode: str = "EXAM",
     ) -> dict:
         """
         Produce a complete decision payload.
-
-        Returns:
-            {
-                "risk_score": 72.5,
-                "risk_tier": { "label": "High Risk", "color": "#f97316" },
-                "session_status": "FLAGGED",
-                "action": "FLAG_FOR_REVIEW",
-                "reasoning": "...",
-                "violation_count": 3,
-                "violations": [...],
-                "ai_confidence": 0.87,
-            }
         """
-        status = _classify_status(risk_score)
+        profile = get_mode_profile(mode)
+        status = _classify_status(risk_score, mode)
         tier   = _get_risk_tier(risk_score)
-        action = _STATUS_ACTION_MAP.get(status, ACTION_CONTINUE)
+        
+        if status == STATUS_CLEAN:
+            action = ACTION_CONTINUE
+        elif status == STATUS_UNDER_REVIEW:
+            action = ACTION_WARN
+        elif status == STATUS_FLAGGED:
+            action = ACTION_FLAG
+        elif status == STATUS_SUSPENDED:
+            action = ACTION_SUSPEND if profile.get("auto_suspend", True) else ACTION_FLAG
+        else:
+            action = ACTION_CONTINUE
+
         reasoning = _build_reasoning(violations, risk_score)
 
         return {
@@ -100,13 +100,21 @@ class SessionEvaluator:
             "risk_tier": {
                 "label": tier["label"],
                 "color": tier["color"],
-                "min":   tier["min"],
-                "max":   tier["max"],
             },
             "session_status": status,
             "action": action,
             "reasoning": reasoning,
             "violation_count": len(violations),
-            "violations": [v.to_dict() for v in violations],
+            "violations": [
+                {
+                    "rule_id": v.rule_id,
+                    "label": v.label,
+                    "severity": v.severity,
+                    "weight": v.weight,
+                    "reason": v.reason,
+                }
+                for v in violations
+            ],
             "ai_confidence": round(confidence, 2),
+            "mode": profile["strictness"],
         }

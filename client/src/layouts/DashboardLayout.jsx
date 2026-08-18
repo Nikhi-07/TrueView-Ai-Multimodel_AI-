@@ -9,7 +9,7 @@ export default function DashboardLayout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-white text-black font-sans">
+    <div className="min-h-screen bg-[#f8fafc] text-slate-900 font-sans">
       {/* Sidebar */}
       <Sidebar
         collapsed={sidebarCollapsed}
@@ -19,7 +19,7 @@ export default function DashboardLayout() {
       {/* Mobile overlay */}
       {mobileMenuOpen && (
         <div
-          className="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm lg:hidden"
+          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-xs lg:hidden"
           onClick={() => setMobileMenuOpen(false)}
         />
       )}
@@ -27,15 +27,15 @@ export default function DashboardLayout() {
       {/* Main area */}
       <div
         className={cn(
-          'transition-all duration-300 bg-white',
-          sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-[260px]'
+          'transition-all duration-200 min-h-screen flex flex-col',
+          sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-[230px]'
         )}
       >
         <Navbar onMenuToggle={() => setMobileMenuOpen(!mobileMenuOpen)} />
         
         {/* Page content */}
-        <main className="p-6 min-h-[calc(100vh-4rem)] bg-white text-black">
-          <div className="page-enter">
+        <main className="p-6 md:p-8 flex-1 bg-[#f8fafc]">
+          <div className="max-w-[1600px] mx-auto">
             <Outlet />
           </div>
         </main>
@@ -43,3 +43,4 @@ export default function DashboardLayout() {
     </div>
   );
 }
+

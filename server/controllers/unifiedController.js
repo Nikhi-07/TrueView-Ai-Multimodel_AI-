@@ -90,6 +90,14 @@ const logUnifiedEvent = async (req, res, next) => {
       await session.save();
     }
 
+    // Broadcast live update to any active dashboards connected via Socket.IO
+    req.app.get('io')?.emit('DASHBOARD_LIVE_EVENT', {
+      sessionId: session_id,
+      riskScore: currentRiskScore,
+      riskLevel,
+      timestamp: new Date()
+    });
+
     res.json({
       success: true,
       message: 'Unified monitoring event logged successfully',
@@ -107,20 +115,116 @@ const logUnifiedEvent = async (req, res, next) => {
 // @access  Public / Private
 const getDashboardStats = async (req, res, next) => {
   try {
+    const timeRange = (req.query.timeRange || '30D').toUpperCase();
     let query = {};
     if (req.user && req.user.role !== 'admin') {
       query.userEmail = req.user.email;
     }
 
-    const activeSessionsCount = await Session.countDocuments({ ...query, status: 'ACTIVE' });
-    const totalSessionsCount = await Session.countDocuments(query);
-    const totalAlertsCount = await Alert.countDocuments(query);
-    const phoneDetectionsCount = await Session.aggregate([
-      { $match: query },
-      { $group: { _id: null, total: { $sum: '$phoneDetections' } } }
-    ]);
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
 
-    const totalPhoneViolations = phoneDetectionsCount[0]?.total || 0;
+    const totalSessionsCount = await Session.countDocuments(query);
+    const activeSessionsCount = await Session.countDocuments({
+      ...query,
+      status: { $in: ['ACTIVE', 'LIVE', 'WARNING', 'READY'] }
+    });
+    const completedSessionsCount = await Session.countDocuments({
+      ...query,
+      status: 'COMPLETED'
+    });
+    const todaySessionsCount = await Session.countDocuments({
+      ...query,
+      createdAt: { $gte: startOfDay }
+    });
+
+    const totalAlertsCount = await Alert.countDocuments(query);
+    const criticalAlertsCount = await Alert.countDocuments({
+      ...query,
+      severity: { $in: ['CRITICAL', 'danger'] }
+    });
+    const highAlertsCount = await Alert.countDocuments({
+      ...query,
+      severity: { $in: ['HIGH', 'warning'] }
+    });
+
+    // Build Dynamic Time Buckets for Real-Time Charts
+    const now = new Date();
+    const buckets = [];
+
+    if (timeRange === 'TODAY') {
+      // 6 time buckets for today: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
+      for (let h = 0; h < 24; h += 4) {
+        const bStart = new Date(startOfDay.getTime() + h * 3600000);
+        const bEnd = new Date(startOfDay.getTime() + (h + 4) * 3600000);
+        const label = `${String(h).padStart(2, '0')}:00`;
+        buckets.push({ label, start: bStart, end: bEnd });
+      }
+    } else if (timeRange === '7D') {
+      // Last 7 calendar days
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        const bStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+        const bEnd = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        buckets.push({ label: `${mm}-${dd}`, start: bStart, end: bEnd });
+      }
+    } else if (timeRange === 'CUSTOM') {
+      // 4 weekly buckets: W1, W2, W3, W4
+      for (let i = 3; i >= 0; i--) {
+        const bStart = new Date(now.getTime() - (i + 1) * 7 * 86400000);
+        const bEnd = new Date(now.getTime() - i * 7 * 86400000);
+        buckets.push({ label: `W${4 - i}`, start: bStart, end: bEnd });
+      }
+    } else {
+      // Default '30D': 6 intervals spanning the last 30 days
+      const daysPerBucket = 5;
+      for (let i = 5; i >= 0; i--) {
+        const dStart = new Date(now.getTime() - (i + 1) * daysPerBucket * 86400000);
+        const dEnd = new Date(now.getTime() - i * daysPerBucket * 86400000);
+        const mm = String(dEnd.getMonth() + 1).padStart(2, '0');
+        const dd = String(dEnd.getDate()).padStart(2, '0');
+        buckets.push({ label: `${mm}-${dd}`, start: dStart, end: dEnd });
+      }
+    }
+
+    // Execute real aggregate queries across the time buckets
+    const sessionsOverTime = [];
+    const alertsOverTime = [];
+
+    for (const b of buckets) {
+      const [createdCount, startedCount, completedCount, suspendedCount] = await Promise.all([
+        Session.countDocuments({ ...query, createdAt: { $gte: b.start, $lt: b.end } }),
+        Session.countDocuments({ ...query, startTime: { $gte: b.start, $lt: b.end } }),
+        Session.countDocuments({ ...query, status: 'COMPLETED', updatedAt: { $gte: b.start, $lt: b.end } }),
+        Session.countDocuments({ ...query, status: 'SUSPENDED', updatedAt: { $gte: b.start, $lt: b.end } }),
+      ]);
+
+      sessionsOverTime.push({
+        date: b.label,
+        created: createdCount,
+        started: startedCount,
+        completed: completedCount,
+        suspended: suspendedCount,
+      });
+
+      const [criticalCount, highCount, mediumCount, lowCount] = await Promise.all([
+        Alert.countDocuments({ ...query, severity: { $in: ['CRITICAL', 'danger'] }, timestamp: { $gte: b.start, $lt: b.end } }),
+        Alert.countDocuments({ ...query, severity: { $in: ['HIGH', 'warning'] }, timestamp: { $gte: b.start, $lt: b.end } }),
+        Alert.countDocuments({ ...query, severity: 'MEDIUM', timestamp: { $gte: b.start, $lt: b.end } }),
+        Alert.countDocuments({ ...query, severity: { $in: ['LOW', 'INFO', 'info'] }, timestamp: { $gte: b.start, $lt: b.end } }),
+      ]);
+
+      alertsOverTime.push({
+        date: b.label,
+        critical: criticalCount,
+        high: highCount,
+        medium: mediumCount,
+        low: lowCount,
+      });
+    }
 
     const recentAlerts = await Alert.find(query).sort({ timestamp: -1 }).limit(10);
     const recentSessions = await Session.find(query).sort({ startTime: -1 }).limit(10);
@@ -135,12 +239,19 @@ const getDashboardStats = async (req, res, next) => {
     res.json({
       success: true,
       stats: {
-        activeSessions: activeSessionsCount || 0,
-        usersOnline: activeSessionsCount + 1,
-        todaysAlerts: totalAlertsCount,
-        totalViolations: totalPhoneViolations,
+        mySessions: totalSessionsCount,
+        activeSessions: activeSessionsCount,
+        completedSessions: completedSessionsCount,
+        myAlerts: totalAlertsCount,
+        criticalAlerts: criticalAlertsCount,
+        highAlerts: highAlertsCount,
+        todaySessions: todaySessionsCount,
+        totalSessions: totalSessionsCount,
+        totalViolations: totalAlertsCount,
         systemHealth: 100,
       },
+      sessionsOverTime,
+      alertsOverTime,
       alerts: recentAlerts,
       sessions: recentSessions,
       timeline: timelineItems,
@@ -149,6 +260,7 @@ const getDashboardStats = async (req, res, next) => {
     next(error);
   }
 };
+
 
 // @desc    Get all alerts for the current user
 // @route   GET /api/ai-engine/alerts
@@ -166,8 +278,219 @@ const getAlerts = async (req, res, next) => {
   }
 };
 
+// @desc    Get all sessions from MongoDB with optional filtering
+// @route   GET /api/ai-engine/sessions
+// @access  Private / Public
+const getSessions = async (req, res, next) => {
+  try {
+    const { filter = 'ALL', search = '' } = req.query;
+    let query = {};
+
+    if (req.user && req.user.role !== 'admin') {
+      query.userEmail = req.user.email;
+    }
+
+    if (filter === 'ACTIVE') {
+      query.status = { $in: ['ACTIVE', 'LIVE', 'WARNING', 'READY'] };
+    } else if (filter === 'FLAGGED') {
+      query.status = { $in: ['SUSPENDED', 'SUSPENDING', 'FLAGGED', 'WARNING'] };
+    }
+
+    if (search) {
+      query.$or = [
+        { sessionId: { $regex: search, $options: 'i' } },
+        { userName: { $regex: search, $options: 'i' } },
+        { userEmail: { $regex: search, $options: 'i' } },
+        { mode: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    const sessions = await Session.find(query).sort({ createdAt: -1 });
+    res.json({ success: true, count: sessions.length, sessions });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get detailed session by sessionId including timeline & alerts
+// @route   GET /api/ai-engine/sessions/:sessionId
+// @access  Private / Public
+const getSessionById = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await Session.findOne({ sessionId });
+    if (!session) {
+      return res.status(404).json({ success: false, message: 'Session not found' });
+    }
+
+    const alerts = await Alert.find({ sessionId }).sort({ timestamp: 1 });
+    const timeline = alerts.map(a => ({
+      id: a._id,
+      timestamp: a.timestamp,
+      type: a.eventType || a.type,
+      severity: a.severity,
+      evidence: a.evidence,
+      status: a.status,
+    }));
+
+    res.json({
+      success: true,
+      session,
+      alerts,
+      timeline,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Upload & persist session video recording
+// @route   POST /api/ai-engine/sessions/:sessionId/recording
+// @access  Private / Public
+const fs = require('fs');
+const path = require('path');
+
+const uploadSessionRecording = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await Session.findOne({ sessionId });
+    if (!session) {
+      return res.status(404).json({ success: false, message: 'Session not found' });
+    }
+
+    const recordingsDir = path.join(__dirname, '..', 'uploads', 'recordings');
+    if (!fs.existsSync(recordingsDir)) {
+      fs.mkdirSync(recordingsDir, { recursive: true });
+    }
+
+    let bufferToWrite = null;
+    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+      bufferToWrite = req.body;
+    } else if (req.body && req.body.videoBase64) {
+      const base64Data = req.body.videoBase64.replace(/^data:video\/\w+;base64,/, '');
+      bufferToWrite = Buffer.from(base64Data, 'base64');
+    }
+
+    if (!bufferToWrite || bufferToWrite.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid video binary payload received'
+      });
+    }
+
+    const filename = `${sessionId}_${Date.now()}.webm`;
+    const filePath = path.join(recordingsDir, filename);
+
+    // Binary-safe synchronous file write
+    fs.writeFileSync(filePath, bufferToWrite);
+    const writtenStat = fs.statSync(filePath);
+
+    if (writtenStat.size !== bufferToWrite.length) {
+      console.error(`[Recording Upload] Disk size mismatch: wrote ${writtenStat.size} bytes vs ${bufferToWrite.length} buffer bytes`);
+    } else {
+      console.log(`[Recording Upload] Successfully persisted ${filename}: ${writtenStat.size} bytes`);
+    }
+
+    const recordingUrl = `/uploads/recordings/${filename}`;
+    session.recordingUrl = recordingUrl;
+    await session.save();
+
+    res.json({
+      success: true,
+      message: 'Session recording saved successfully',
+      recordingUrl,
+      size: writtenStat.size,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    End session, calculate final score, and generate report
+// @route   POST /api/ai-engine/sessions/:sessionId/end
+// @access  Private / Public
+const endSession = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    let session = await Session.findOne({ sessionId });
+    if (!session) {
+      return res.status(404).json({ success: false, message: 'Session not found' });
+    }
+
+    session.endTime = new Date();
+    session.status = 'COMPLETED';
+    const durationSeconds = Math.max(0, Math.round((new Date(session.endTime) - new Date(session.startTime)) / 1000));
+    session.durationSeconds = durationSeconds;
+
+    const alerts = await Alert.find({ sessionId });
+    const violationAlerts = alerts.filter(a => ['CRITICAL', 'HIGH', 'MEDIUM'].includes(String(a.severity).toUpperCase()));
+    const totalViolations = violationAlerts.length;
+    const phoneDetections = session.phoneDetections || alerts.filter(a => a.type === 'PHONE_DETECTED').length;
+
+    let score = 100 - (phoneDetections * 25) - (totalViolations * 5);
+    score = Math.max(0, Math.min(100, score));
+    session.overallIntegrityScore = score;
+    await session.save();
+
+    // Create Report
+    const reportId = `RPT-${Date.now().toString().slice(-6)}`;
+    const status = score < 60 ? 'FLAGGED' : score < 85 ? 'REVIEW_REQUIRED' : 'PASSED';
+    const riskLevel = score < 60 ? 'HIGH_RISK' : score < 85 ? 'MEDIUM_RISK' : 'NORMAL';
+
+    const timeline = alerts
+      .slice()
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+      .map(a => ({
+        timestamp: a.timestamp,
+        eventType: a.eventType || a.type,
+        severity: a.severity,
+        description: a.evidence || '',
+        confidence: a.confidence,
+      }));
+
+    let report = await Report.findOne({ sessionId });
+    if (!report) {
+      report = await Report.create({
+        reportId,
+        sessionId,
+        userName: session.userName,
+        userEmail: session.userEmail,
+        sessionType: session.mode,
+        startTime: session.startTime,
+        endTime: session.endTime,
+        durationSeconds,
+        overallIntegrityScore: score,
+        riskLevel,
+        totalViolations,
+        phoneDetections,
+        alerts: alerts.map(a => ({
+          eventType: a.eventType || a.type,
+          severity: a.severity,
+          evidence: a.evidence,
+          timestamp: a.timestamp,
+        })),
+        timeline,
+        status,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Session completed successfully',
+      session,
+      report,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   logUnifiedEvent,
   getDashboardStats,
   getAlerts,
+  getSessions,
+  getSessionById,
+  uploadSessionRecording,
+  endSession,
 };

@@ -84,13 +84,26 @@ class LivenessStrategyManager:
                 "note": f"Passive liveness uncertain ({int(conf*100)}%). Active challenge triggered: {challenge_type}."
             }
 
+        is_live = passive_liveness_res.get("is_live", status == "live")
+        p_real = float(passive_liveness_res.get("p_real", conf))
+        p_spoof = float(passive_liveness_res.get("p_spoof", round(1.0 - conf, 4)))
+        attack_type = str(passive_liveness_res.get("attack_type", "NONE"))
+        model_name = str(passive_liveness_res.get("model", "convnext-tiny-run04"))
+
         return {
             "status": status,
+            "liveness_status": "LIVE" if is_live else "SPOOF",
             "confidence": conf,
             "passive_confidence": conf,
+            "is_live": is_live,
+            "liveness_score": p_real,
+            "p_real": p_real,
+            "p_spoof": p_spoof,
+            "attack_type": attack_type,
+            "model": model_name,
             "active_challenge_required": False,
             "active_challenge_type": None,
-            "note": "Passive liveness confirmed."
+            "note": "Passive liveness confirmed." if is_live else f"Presentation attack detected ({attack_type})."
         }
 
     def reset(self, session_id: str):

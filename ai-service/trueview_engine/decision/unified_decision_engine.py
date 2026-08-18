@@ -98,7 +98,7 @@ class UnifiedDecisionEngine:
         else:
             level = "CRITICAL"
             risk_label = "HIGH-RISK EVENT"
-            action = "SUSPEND_SESSION"
+            action = "SUSPEND_SESSION" if getattr(policy, "auto_suspend", False) else "FLAG_FOR_REVIEW"
 
         if not reasons:
             reasons = [f"Session is operating within normal parameters for '{session_type}' policy."]

@@ -116,8 +116,59 @@ const generateReport = async (req, res, next) => {
   }
 };
 
+// @desc    Export proctoring reports as CSV
+// @route   GET /api/reports/export/csv
+// @access  Private / Public
+const exportReportsCsv = async (req, res, next) => {
+  try {
+    const query = req.user && req.user.role !== 'admin' ? { userEmail: req.user.email } : {};
+    const reports = await Report.find(query).sort({ createdAt: -1 });
+
+    const headers = [
+      'Report ID',
+      'Session ID',
+      'Candidate Name',
+      'Candidate Email',
+      'Session Mode',
+      'Integrity Score (%)',
+      'Risk Level',
+      'Status',
+      'Total Violations',
+      'Phone Detections',
+      'Duration (sec)',
+      'Start Time',
+      'End Time',
+    ];
+
+    const rows = reports.map(r => [
+      `"${r.reportId}"`,
+      `"${r.sessionId}"`,
+      `"${(r.userName || '').replace(/"/g, '""')}"`,
+      `"${(r.userEmail || '').replace(/"/g, '""')}"`,
+      `"${r.sessionType || 'EXAM'}"`,
+      r.overallIntegrityScore ?? 100,
+      `"${r.riskLevel || 'NORMAL'}"`,
+      `"${r.status || 'PASSED'}"`,
+      r.totalViolations || 0,
+      r.phoneDetections || 0,
+      r.durationSeconds || 0,
+      `"${r.startTime ? new Date(r.startTime).toISOString() : ''}"`,
+      `"${r.endTime ? new Date(r.endTime).toISOString() : ''}"`,
+    ]);
+
+    const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\r\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=trueview_proctoring_reports_${Date.now()}.csv`);
+    res.status(200).send(csvContent);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getReports,
   getReportById,
   generateReport,
+  exportReportsCsv,
 };

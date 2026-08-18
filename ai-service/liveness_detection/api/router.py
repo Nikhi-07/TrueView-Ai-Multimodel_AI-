@@ -29,16 +29,25 @@ class MultiFrameLivenessRequest(BaseModel):
     eye_blink_left: Optional[List[float]] = None
     eye_blink_right: Optional[List[float]] = None
 
+@router.post("/detect-liveness")
+@router.post("/evaluate-frame")
 @router.post("/evaluate-auth-liveness")
 async def evaluate_auth_liveness(request: AuthLivenessEvaluationRequest):
     """
-    POST /ai-api/liveness/evaluate-auth-liveness
-    Evaluates MiniFASNet anti-spoofing + MediaPipe blendshape blink detector.
+    POST /api/liveness/detect-liveness
+    POST /api/liveness/evaluate-auth-liveness
+    Evaluates ConvNeXt-Tiny anti-spoofing + blink detection.
     Returns standardized output format:
     {
-        "antiSpoof": { "status": "LIVE" | "SPOOF", "score": 0.98 },
-        "blink": { "detected": true, "count": 1, "state": "OPEN" },
-        "face": { "detected": true, "count": 1 }
+        "is_live": bool,
+        "status": "LIVE" | "SPOOF",
+        "score": float,
+        "p_real": float,
+        "p_spoof": float,
+        "attack_type": str,
+        "antiSpoof": { "status": "LIVE" | "SPOOF", "score": float },
+        "blink": { "detected": bool, "count": int, "state": str },
+        "face": { "detected": bool, "count": int }
     }
     """
     try:
@@ -52,6 +61,17 @@ async def evaluate_auth_liveness(request: AuthLivenessEvaluationRequest):
             eye_blink_right=request.eye_blink_right,
             face_box=request.face_box
         )
+        
+        # Enrich top-level keys for easy direct consumption by Behaviour & Decision engines
+        anti_spoof = result.get("antiSpoof", {})
+        is_live = anti_spoof.get("status") == "LIVE" or (anti_spoof.get("p_spoof") is not None and anti_spoof.get("p_spoof") < 0.31)
+        result["is_live"] = is_live
+        result["status"] = anti_spoof.get("status", "LIVE" if is_live else "SPOOF")
+        result["score"] = anti_spoof.get("score", 0.95)
+        result["p_real"] = anti_spoof.get("p_real", anti_spoof.get("score", 0.95))
+        result["p_spoof"] = anti_spoof.get("p_spoof", 0.05)
+        result["attack_type"] = anti_spoof.get("attack_type", "NONE")
+        result["model"] = "convnext-tiny-run04"
         return result
     except Exception as e:
         print(f"[AuthLiveness] Error in liveness evaluation: {e}")

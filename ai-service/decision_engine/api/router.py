@@ -45,8 +45,15 @@ class TelemetryInput(BaseModel):
     yolo_confidence: Optional[float] = None
     detected_objects: Optional[list] = []
 
-    # Liveness
+    # Liveness (ConvNeXt-Tiny Run 04)
     is_spoof: Optional[bool] = False
+    p_spoof: Optional[float] = None
+    p_real: Optional[float] = None
+    attack_type: Optional[str] = "NONE"
+    # Mode & Session Context
+    mode: Optional[str] = "EXAM"
+    session_mode: Optional[str] = "EXAM"
+    session_id: Optional[str] = None
 
     # Derived / Behaviour
     user_absent: Optional[bool] = False

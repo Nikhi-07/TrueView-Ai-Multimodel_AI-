@@ -52,7 +52,12 @@ const isOriginAllowed = (origin) => {
   if (origin.startsWith('chrome-extension://')) return true;
   if (
     process.env.NODE_ENV !== 'production' &&
-    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+    (
+      /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+      /^https?:\/\/.*\.devtunnels\.ms(:\d+)?$/.test(origin) ||
+      /^https?:\/\/.*\.app\.github\.dev(:\d+)?$/.test(origin) ||
+      /^https?:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/.test(origin)
+    )
   ) {
     return true;
   }
@@ -72,10 +77,21 @@ const io = new Server(httpServer, {
 
 // Attach Proctor Room Socket Handlers
 initProctorSocket(io);
+app.set('io', io);
+
+const path = require('path');
+const fs = require('fs');
+
+// Ensure uploads/recordings directory exists
+const uploadsDir = path.join(__dirname, 'uploads', 'recordings');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 // Security Middlewares
 app.use(helmet({
-  contentSecurityPolicy: false
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 app.use(cors({
   origin: (origin, callback) => callback(null, isOriginAllowed(origin)),
@@ -83,7 +99,12 @@ app.use(cors({
 }));
 
 // Body parser
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.raw({ type: ['video/webm', 'video/mp4', 'application/octet-stream'], limit: '100mb' }));
+
+// Static uploads serving
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Disable Mongoose command buffering so queries fail fast if DB is disconnected
 mongoose.set('bufferCommands', false);

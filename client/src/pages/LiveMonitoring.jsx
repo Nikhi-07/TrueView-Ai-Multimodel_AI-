@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Mic, MicOff, Video, VideoOff, MonitorUp, PhoneOff, Users, MessageSquare, Info, ShieldAlert, AlertTriangle, X
 } from 'lucide-react';
@@ -14,13 +15,17 @@ const CONTEXT_OPTIONS = [
 ];
 
 export default function LiveMonitoring() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const initialMode = (searchParams.get('mode') || 'EXAM').toUpperCase();
+
   const [isMonitoringActive, setIsMonitoringActive] = useState(false);
-  const [sessionType, setSessionType] = useState('EXAM');
+  const [sessionType, setSessionType] = useState(initialMode);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [terminationReason, setTerminationReason] = useState(null);
   const [engineResult, setEngineResult] = useState(null);
   
-  // UI Controls (Visual only for now, can be hooked to actual WebRTC later)
+  // UI Controls
   const [isMicOn, setIsMicOn] = useState(true);
   const [isCamOn, setIsCamOn] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -31,20 +36,19 @@ export default function LiveMonitoring() {
   const sessionIdRef = useRef(`session_${Date.now()}`);
   const timerRef = useRef(null);
   const unifiedLoopRef = useRef(null);
-  // Host report is generated ONCE per session (guard against double-fire from
-  // kickout + unmount cleanup).
   const reportGeneratedRef = useRef(false);
   const audioContextRef = useRef(null);
   const audioProcessorRef = useRef(null);
+  const audioStreamRef = useRef(null);
   const audioSamplesRef = useRef([]);
   const lastSpokenRef = useRef({ time: 0, text: '' });
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
+  const isSessionTerminatedRef = useRef(false);
 
-  // Latest-frame strategy: at most ONE AI request in flight. If the engine is
-  // still busy, the fresh frame is dropped instead of queuing stale frames, so
-  // alert latency tracks engine latency (never engine latency × backlog).
+  // Latest-frame strategy: at most ONE AI request in flight.
   const aiInFlightRef = useRef(false);
   const monitoringActiveRef = useRef(false);
-  // Event transition gating: only state CHANGES create alerts / DB rows.
   const emittedEventsRef = useRef({});
 
   const speakAlert = useCallback((text) => {
@@ -86,6 +90,7 @@ export default function LiveMonitoring() {
   const startAudioCapture = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioStreamRef.current = stream;
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       const audioCtx = new AudioCtx();
       audioContextRef.current = audioCtx;
@@ -99,17 +104,126 @@ export default function LiveMonitoring() {
         const samples = Array.from(e.inputBuffer.getChannelData(0));
         audioSamplesRef.current = samples.slice(0, 1024);
       };
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[LiveMonitoring] Audio capture error:', err);
+    }
   };
 
   const stopAudioCapture = () => {
-    if (audioProcessorRef.current) { audioProcessorRef.current.disconnect(); audioProcessorRef.current = null; }
-    if (audioContextRef.current) { audioContextRef.current.close(); audioContextRef.current = null; }
+    if (audioProcessorRef.current) { 
+      try { audioProcessorRef.current.disconnect(); } catch (_) {}
+      audioProcessorRef.current = null; 
+    }
+    if (audioContextRef.current) { 
+      try { audioContextRef.current.close(); } catch (_) {}
+      audioContextRef.current = null; 
+    }
+    if (audioStreamRef.current) {
+      try { audioStreamRef.current.getTracks().forEach(t => t.stop()); } catch (_) {}
+      audioStreamRef.current = null;
+    }
     audioSamplesRef.current = [];
   };
 
-  // Generate the host report from ALL recorded alerts (same as the Proctor Room
-  // auto-report). Runs once per session; the host sees it on the Reports page.
+  const startVideoCapture = async () => {
+    try {
+      if (!window.MediaRecorder) return;
+
+      // Obtain video track directly from CameraFeed's active stream
+      let videoStream = cameraFeedRef.current?.getStream?.();
+      if (!videoStream || videoStream.getVideoTracks().length === 0) {
+        for (let i = 0; i < 5; i++) {
+          await new Promise(r => setTimeout(r, 200));
+          videoStream = cameraFeedRef.current?.getStream?.();
+          if (videoStream && videoStream.getVideoTracks().length > 0) break;
+        }
+      }
+
+      if (!videoStream || videoStream.getVideoTracks().length === 0) {
+        videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }).catch(() => null);
+      }
+
+      const videoTrack = videoStream?.getVideoTracks?.()[0];
+      const audioTrack = audioStreamRef.current?.getAudioTracks?.()[0];
+
+      if (!videoTrack) {
+        console.warn('[LiveMonitoring] No active video track found for session recording.');
+        return;
+      }
+
+      const combinedStream = new MediaStream([videoTrack, audioTrack].filter(Boolean));
+      recordedChunksRef.current = [];
+
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+        ? 'video/webm;codecs=vp8,opus'
+        : (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+          ? 'video/webm;codecs=vp9,opus'
+          : (MediaRecorder.isTypeSupported('video/webm') ? 'video/webm' : ''));
+
+      const options = {
+        mimeType: mimeType || undefined,
+        videoBitsPerSecond: 1500000
+      };
+
+      const recorder = new MediaRecorder(combinedStream, options);
+      
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          recordedChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstart = () => {
+        console.log(`[LiveMonitoring] MediaRecorder started: ${recorder.mimeType || mimeType}`);
+      };
+
+      recorder.start(1000);
+      mediaRecorderRef.current = recorder;
+    } catch (err) {
+      console.warn('[LiveMonitoring] MediaRecorder initialization warning:', err);
+    }
+  };
+
+  const stopVideoCapture = async () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      try {
+        if (recorder.state === 'recording') {
+          recorder.requestData();
+        }
+        await new Promise((resolve) => {
+          recorder.onstop = resolve;
+          recorder.stop();
+        });
+      } catch (err) {
+        console.warn('[LiveMonitoring] MediaRecorder stop error:', err);
+      }
+    }
+
+    if (recordedChunksRef.current.length > 0) {
+      try {
+        const mime = recorder?.mimeType || 'video/webm';
+        const blob = new Blob(recordedChunksRef.current, { type: mime });
+        console.log(`[LiveMonitoring] Assembled recording Blob: ${blob.size} bytes (${recordedChunksRef.current.length} chunks)`);
+        
+        if (blob.size > 0) {
+          const res = await fetch(`/api/ai-engine/sessions/${sessionIdRef.current}/recording`, {
+            method: 'POST',
+            headers: { 'Content-Type': mime },
+            body: blob
+          });
+          const resData = await res.json().catch(() => ({}));
+          console.log('[LiveMonitoring] Recording upload result:', resData);
+        }
+      } catch (uploadErr) {
+        console.error('[LiveMonitoring] Recording upload failed:', uploadErr);
+      } finally {
+        recordedChunksRef.current = [];
+      }
+    }
+  };
+
+  // Generate the host report from ALL recorded alerts
   const generateHostReport = async () => {
     if (reportGeneratedRef.current) return;
     reportGeneratedRef.current = true;
@@ -124,11 +238,24 @@ export default function LiveMonitoring() {
   };
 
   const stopMonitoringDueToKickout = async () => {
-    stopAudioCapture();
+    if (isSessionTerminatedRef.current) return;
+    isSessionTerminatedRef.current = true;
+
     monitoringActiveRef.current = false;
     if (unifiedLoopRef.current) clearTimeout(unifiedLoopRef.current);
-    // Generate the report BEFORE the stop call so an immediate navigation/exit
-    // cannot abort it (the report request is awaited).
+    
+    await stopVideoCapture();
+    stopAudioCapture();
+
+    // Complete session in MongoDB
+    await fetch(`/api/ai-engine/sessions/${sessionIdRef.current}/end`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('trueview_token')}`
+      }
+    }).catch(() => {});
+
     await generateHostReport();
     await fetch(`/ai-api/ai/session/${sessionIdRef.current}/stop`, { method: 'POST' }).catch(() => {});
     setIsMonitoringActive(false);
@@ -143,7 +270,6 @@ export default function LiveMonitoring() {
 
   const startMeeting = async () => {
     sessionIdRef.current = `session_${Date.now()}`;
-    // New session -> a fresh report must be allowed for this session.
     reportGeneratedRef.current = false;
     setAlerts([]);
 
@@ -158,6 +284,7 @@ export default function LiveMonitoring() {
     }).catch(() => {});
 
     startAudioCapture();
+    startVideoCapture();
     setIsMonitoringActive(true);
     monitoringActiveRef.current = true;
 
@@ -235,6 +362,8 @@ export default function LiveMonitoring() {
                 speakAlert("Warning! Multiple persons detected in the room.");
               } else if (evt.type === 'PROLONGED_DISTRACTION' && sessionType === 'EXAM') {
                 speakAlert("Warning! Please focus directly on your screen.");
+              } else if (evt.type === 'SPOOF_DETECTED' || evt.type === 'LIVENESS_FAILED') {
+                speakAlert("Warning! Presentation attack detected. Live face required.");
               } else if (evt.type === 'USER_ABSENT') {
                 speakAlert("Warning! Please stay in the camera view.");
               } else if (evt.severity === 'CRITICAL') {
@@ -354,6 +483,13 @@ export default function LiveMonitoring() {
 
               {engineResult && (
                 <div className="bg-black/60 backdrop-blur-md px-3 py-2 rounded-lg border border-white/10 flex items-center gap-3 text-[11px] text-gray-200">
+                  {engineResult.liveness && (
+                    <span className="flex items-center gap-1">
+                      Liveness: <b className={engineResult.liveness.is_live ? "text-emerald-400" : "text-rose-400"}>
+                        {engineResult.liveness.is_live ? "LIVE" : `SPOOF (${engineResult.liveness.attack_type || 'ATTACK'})`}
+                      </b>
+                    </span>
+                  )}
                   <span>Gaze: <b className="text-white">{engineResult.attention?.gaze || 'N/A'}</b></span>
                   <span>Pose: <b className="text-white">{engineResult.attention?.head_pose || 'N/A'}</b></span>
                   {engineResult.performance?.latency_ms > 0 && (
@@ -471,12 +607,13 @@ export default function LiveMonitoring() {
 
           <button 
             onClick={async () => {
-              if (window.confirm("Are you sure you want to leave the examination? This may flag your session.")) {
+              if (window.confirm("Are you sure you want to end this proctoring session? Telemetry and report will be archived.")) {
                 await stopMonitoringDueToKickout();
-                window.location.href = '/';
+                navigate('/sessions');
               }
             }}
             className="w-14 h-10 rounded-full bg-[#ea4335] hover:bg-[#d93025] text-white flex items-center justify-center transition-colors shadow-lg px-6"
+            title="End Proctoring Session"
           >
             <PhoneOff size={20} />
           </button>

@@ -20,6 +20,7 @@ class MonitoringPolicy:
     max_distraction_sec: float = 2.0
     require_strict_identity: bool = True
     require_strict_liveness: bool = True
+    auto_suspend: bool = False
     restricted_objects: List[str] = field(default_factory=lambda: ["cell phone", "mobile phone", "book", "laptop"])
     risk_weights: Dict[str, float] = field(default_factory=dict)
     alert_threshold_score: float = 60.0
@@ -35,6 +36,7 @@ POLICY_EXAM = MonitoringPolicy(
     max_distraction_sec=1.5,
     require_strict_identity=True,
     require_strict_liveness=True,
+    auto_suspend=True,
     restricted_objects=["cell phone", "mobile phone", "book", "notes", "laptop"],
     risk_weights={
         "phone_detected": 15.0,
@@ -43,6 +45,7 @@ POLICY_EXAM = MonitoringPolicy(
         "speaking_detected": 8.0,
         "prolonged_distraction": 5.0,
         "identity_mismatch": 20.0,
+        "spoof_detected": 15.0,
     },
     alert_threshold_score=50.0
 )
@@ -55,15 +58,17 @@ POLICY_INTERVIEW = MonitoringPolicy(
     max_absence_sec=5.0,
     max_distraction_sec=3.0,
     require_strict_identity=True,
-    require_strict_liveness=False,
+    require_strict_liveness=True,
+    auto_suspend=False,
     restricted_objects=["cell phone"],
     risk_weights={
         "phone_detected": 8.0,
         "multiple_persons": 6.0,
         "user_absent": 5.0,
         "speaking_detected": 0.0,  # Zero penalty for speaking
-        "prolonged_distraction": 2.0,
+        "prolonged_distraction": 0.5,
         "identity_mismatch": 15.0,
+        "spoof_detected": 12.0,
     },
     alert_threshold_score=65.0
 )
@@ -76,15 +81,17 @@ POLICY_ONLINE_CLASS = MonitoringPolicy(
     max_absence_sec=10.0,
     max_distraction_sec=5.0,
     require_strict_identity=False,
-    require_strict_liveness=False,
+    require_strict_liveness=True,
+    auto_suspend=False,
     restricted_objects=[],
     risk_weights={
         "phone_detected": 2.0,
-        "multiple_persons": 1.0,
-        "user_absent": 3.0,
-        "speaking_detected": 0.5,
-        "prolonged_distraction": 4.0,  # Focus on attention tracking
+        "multiple_persons": 0.0,
+        "user_absent": 2.0,
+        "speaking_detected": 0.0,
+        "prolonged_distraction": 0.5,
         "identity_mismatch": 5.0,
+        "spoof_detected": 10.0,
     },
     alert_threshold_score=75.0
 )
@@ -97,15 +104,17 @@ POLICY_MEETING = MonitoringPolicy(
     max_absence_sec=15.0,
     max_distraction_sec=10.0,
     require_strict_identity=False,
-    require_strict_liveness=False,
+    require_strict_liveness=True,
+    auto_suspend=False,
     restricted_objects=[],
     risk_weights={
         "phone_detected": 0.0,
         "multiple_persons": 0.0,
         "user_absent": 1.0,
         "speaking_detected": 0.0,
-        "prolonged_distraction": 1.0,
+        "prolonged_distraction": 0.0,
         "identity_mismatch": 2.0,
+        "spoof_detected": 8.0,
     },
     alert_threshold_score=85.0
 )
@@ -118,15 +127,17 @@ POLICY_WORKPLACE = MonitoringPolicy(
     max_absence_sec=10.0,
     max_distraction_sec=5.0,
     require_strict_identity=True,
-    require_strict_liveness=False,
+    require_strict_liveness=True,
+    auto_suspend=False,
     restricted_objects=["cell phone"],
     risk_weights={
         "phone_detected": 5.0,
-        "multiple_persons": 2.0,
-        "user_absent": 4.0,
-        "speaking_detected": 0.5,
-        "prolonged_distraction": 2.0,
+        "multiple_persons": 1.0,
+        "user_absent": 2.0,
+        "speaking_detected": 0.0,
+        "prolonged_distraction": 0.2,
         "identity_mismatch": 10.0,
+        "spoof_detected": 10.0,
     },
     alert_threshold_score=70.0
 )
