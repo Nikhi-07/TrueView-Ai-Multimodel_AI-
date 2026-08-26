@@ -65,8 +65,8 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
   const timeline = report?.timeline || [];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in overflow-y-auto print:p-0 print:bg-white">
-      <div className="relative w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-8 print:border-none print:shadow-none print:bg-white print:text-black">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in overflow-y-auto print-only-report-overlay print:p-0 print:bg-white">
+      <div className="relative w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-8 print-only-report-card print:border-none print:shadow-none print:bg-white print:text-black">
         
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/80 print:hidden">
@@ -111,7 +111,7 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
           <div className="p-8 space-y-6 max-h-[78vh] overflow-y-auto print:max-h-none print:overflow-visible print:p-6 print:text-black">
             
             {/* Report Official Banner */}
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-6 border-b border-slate-800 print:border-black/20 gap-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-6 border-b border-slate-800 print:border-black/20 gap-4 print-avoid-break">
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-xl font-black tracking-tight text-white print:text-black">TRUEVIEW AI</span>
@@ -142,7 +142,7 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
             </div>
 
             {/* Candidate & Session Info Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-4 rounded-xl bg-slate-800/40 border border-slate-800 print:bg-gray-50 print:border-gray-200">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-4 rounded-xl bg-slate-800/40 border border-slate-800 print:bg-gray-50 print:border-gray-200 print-avoid-break">
               <div>
                 <span className="text-[10px] uppercase font-semibold text-slate-500 print:text-gray-500 block mb-1">Candidate</span>
                 <span className="text-xs font-bold text-slate-200 print:text-black flex items-center gap-1.5">
@@ -180,7 +180,7 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
             </div>
 
             {/* AI Perception Subsystems Evaluation Breakdown */}
-            <div className="space-y-3">
+            <div className="space-y-3 print-avoid-break">
               <h4 className="text-xs font-bold text-slate-300 print:text-black uppercase tracking-wider flex items-center gap-2">
                 <Shield size={14} className="text-emerald-400 print:text-black" />
                 AI Perception Subsystems Audit
@@ -193,6 +193,22 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
                     <CheckCircle2 size={13} className="text-emerald-400" />
                   </div>
                   <p className="text-[10px] text-slate-400 print:text-gray-600">ConvNeXt-Tiny Run 04 verified genuine face</p>
+                </div>
+
+                <div className="p-3 rounded-lg bg-slate-800/40 border border-slate-700/50 print:bg-white print:border-gray-300">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] font-semibold text-slate-300 print:text-black">Registered Identity</span>
+                    {report.identityMismatchCount > 0 ? (
+                      <AlertTriangle size={13} className="text-amber-400" />
+                    ) : (
+                      <CheckCircle2 size={13} className="text-emerald-400" />
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-400 print:text-gray-600">
+                    {report.identityMismatchCount > 0
+                      ? `${report.identityMismatchCount} identity mismatch event(s) recorded`
+                      : 'SFace continuous biometric identity verified'}
+                  </p>
                 </div>
 
                 <div className="p-3 rounded-lg bg-slate-800/40 border border-slate-700/50 print:bg-white print:border-gray-300">
@@ -226,19 +242,11 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
                   </div>
                   <p className="text-[10px] text-slate-400 print:text-gray-600">Speech checked against mode policy</p>
                 </div>
-
-                <div className="p-3 rounded-lg bg-slate-800/40 border border-slate-700/50 print:bg-white print:border-gray-300">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[11px] font-semibold text-slate-300 print:text-black">Multi-Person Check</span>
-                    <CheckCircle2 size={13} className="text-emerald-400" />
-                  </div>
-                  <p className="text-[10px] text-slate-400 print:text-gray-600">Single candidate verification</p>
-                </div>
               </div>
             </div>
 
             {/* Chronological Event Timeline in Report */}
-            <div className="space-y-3 pt-2">
+            <div className="space-y-3 pt-2 print-avoid-break">
               <h4 className="text-xs font-bold text-slate-300 print:text-black uppercase tracking-wider flex items-center gap-2">
                 <Activity size={14} className="text-blue-400 print:text-black" />
                 Verified Event Timeline ({timeline.length} logged incidents)
@@ -254,7 +262,7 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
                   {timeline.map((evt, idx) => (
                     <div 
                       key={idx}
-                      className="p-3 rounded-lg bg-slate-800/40 border border-slate-700/40 print:bg-white print:border-gray-200 text-xs flex items-center justify-between gap-3"
+                      className="p-3 rounded-lg bg-slate-800/40 border border-slate-700/40 print:bg-white print:border-gray-200 text-xs flex items-center justify-between gap-3 print-avoid-break"
                     >
                       <div className="flex items-center gap-2.5">
                         <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
@@ -280,7 +288,7 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
             </div>
 
             {/* Official Signature Section for PDF */}
-            <div className="pt-6 border-t border-slate-800 print:border-gray-300 flex items-center justify-between text-xs text-slate-500 print:text-gray-500">
+            <div className="pt-6 border-t border-slate-800 print:border-gray-300 flex items-center justify-between text-xs text-slate-500 print:text-gray-500 print-avoid-break">
               <span>TrueView AI Security Engine v2.0</span>
               <span>Generated on {new Date().toLocaleString()}</span>
             </div>

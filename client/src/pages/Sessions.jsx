@@ -43,6 +43,7 @@ export default function Sessions() {
             id: s.sessionId,
             user: s.userName || s.userEmail || 'Student Candidate',
             email: s.userEmail,
+            roomTitle: s.roomTitle || (s.roomId ? `Room ${s.roomId}` : null),
             mode: s.mode || s.sessionType || 'EXAM',
             startedAt: startTime.toISOString(),
             duration: durationStr,
@@ -104,7 +105,7 @@ export default function Sessions() {
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Search by Session ID, candidate, or mode..."
+            placeholder="Search by Session ID, room, or mode..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="input-glass pl-9 py-2 text-xs w-full text-white font-medium"
@@ -152,8 +153,18 @@ export default function Sessions() {
               <div>
                 <div className="flex justify-between items-start mb-3">
                   <div>
-                    <span className="text-xs font-mono text-slate-400 block mb-0.5">{session.id}</span>
-                    <h3 className="text-sm font-bold text-white group-hover:text-emerald-400 transition-colors">{session.user}</h3>
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <span className="text-xs font-mono text-slate-400">{session.id}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                        {session.mode}
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-bold text-white group-hover:text-emerald-400 transition-colors">
+                      {session.roomTitle || session.user}
+                    </h3>
+                    {session.roomTitle && (
+                      <p className="text-xs text-slate-400">{session.user}</p>
+                    )}
                   </div>
                   <StatusBadge 
                     label={session.status} 

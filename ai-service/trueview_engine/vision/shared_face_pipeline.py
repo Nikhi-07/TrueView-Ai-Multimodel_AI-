@@ -25,6 +25,7 @@ class SharedFacePipeline:
 
     def __init__(self):
         self.model_manager = ModelManager()
+        self._last_identity_result: Dict[str, Dict[str, Any]] = {}
 
     def process(
         self,
@@ -183,51 +184,72 @@ class SharedFacePipeline:
                 except Exception as e:
                     print(f"[SharedFacePipeline] Liveness evaluation exception: {e}")
 
-        # 5. Periodic Identity Verification (skip-frame strategy) — REAL comparison.
-        #    Honest rule (49): verified=True requires (a) the SFace model actually
-        #    loaded and (b) the registered face embedding supplied by the backend at
-        #    session start. Otherwise status is UNAVAILABLE — no identity event is
-        #    fabricated and the reviewer is never shown a fake REGISTERED_FACE.
-        if frame_index % FRAME_INTERVAL_FACE_RECOGNITION == 0:
-            rec_svc = self.model_manager.recognition_service
-            registered = session_context.get("registered_face_embeddings") or []
+        # 5. Continuous Identity Verification — REAL SFace comparison against registered biometric profile.
+        session_id = session_context.get("session_id", "default")
+        rec_svc = self.model_manager.recognition_service
+        registered = session_context.get("registered_face_embeddings") or []
 
-            if rec_svc is None or not getattr(rec_svc, "is_ready", False):
-                out["identity"] = {
-                    "verified": False, "confidence": 0.0, "status": "UNAVAILABLE",
-                    "recognition_unavailable": True,
-                    "note": "Face recognition model unavailable.",
-                }
-            elif not registered:
-                out["identity"] = {
-                    "verified": False, "confidence": 0.0, "status": "UNAVAILABLE",
-                    "recognition_unavailable": True,
-                    "note": "No registered face profile supplied for this session.",
-                }
-            else:
+        if rec_svc is None or not getattr(rec_svc, "is_ready", False):
+            out["identity"] = {
+                "verified": False, "confidence": 0.0, "status": "UNAVAILABLE",
+                "recognition_unavailable": True,
+                "note": "Face recognition model unavailable.",
+            }
+        elif not registered:
+            out["identity"] = {
+                "verified": False, "confidence": 0.0, "status": "UNAVAILABLE",
+                "recognition_unavailable": True,
+                "note": "No registered face profile supplied for this session.",
+            }
+        elif not out["face_detected"] or frame is None:
+            out["identity"] = {
+                "verified": False, "confidence": 0.0, "status": "FACE_NOT_DETECTED",
+                "recognition_unavailable": False,
+                "note": "No face detected in camera view.",
+            }
+        else:
+            # Check on scheduled frames or when no prior verification exists
+            should_run_recognition = (
+                frame_index % FRAME_INTERVAL_FACE_RECOGNITION == 0
+                or session_id not in self._last_identity_result
+            )
+
+            if should_run_recognition:
                 try:
-                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                    b64_str = base64.b64encode(buffer).decode('utf-8')
-                    emb_res = rec_svc.extract_embedding(b64_str)
+                    # Extract 128-D embedding directly from frame (uses primary face if multiple faces)
+                    emb_res = rec_svc.extract_from_frame(frame)
                     if "error" in emb_res:
-                        out["identity"] = {
-                            "verified": False, "confidence": 0.0, "status": "UNAVAILABLE",
-                            "recognition_unavailable": True, "note": emb_res["error"],
-                        }
+                        if emb_res.get("status") == "FACE_NOT_DETECTED":
+                            out["identity"] = {
+                                "verified": False, "confidence": 0.0, "status": "FACE_NOT_DETECTED",
+                                "recognition_unavailable": False,
+                            }
+                        else:
+                            out["identity"] = {
+                                "verified": False, "confidence": 0.0, "status": "UNAVAILABLE",
+                                "recognition_unavailable": True, "note": emb_res.get("error", "Extraction error"),
+                            }
                     else:
-                        candidates = [{"id": f"registered_{i}", "embedding": emb} for i, emb in enumerate(registered)]
-                        match = rec_svc.compare_embedding(emb_res["embedding"], candidates)
-                        out["identity"] = {
+                        match = rec_svc.compare_embedding(emb_res["embedding"], registered)
+                        ident_result = {
                             "verified": bool(match.get("verified")),
                             "confidence": float(match.get("confidence", 0.0)),
                             "status": "VERIFIED" if match.get("verified") else "MISMATCH",
                             "recognition_unavailable": False,
                             "matched_user_id": match.get("matched_user_id"),
+                            "similarity": float(match.get("confidence", 0.0)),
+                            "threshold": float(match.get("threshold", 0.48)),
                         }
+                        self._last_identity_result[session_id] = ident_result
+                        out["identity"] = ident_result
                 except Exception as e:
+                    print(f"[SharedFacePipeline] Recognition error: {e}")
                     out["identity"] = {
                         "verified": False, "confidence": 0.0, "status": "UNAVAILABLE",
                         "recognition_unavailable": True, "note": f"Recognition error: {e}",
                     }
+            elif session_id in self._last_identity_result:
+                # Use cached identity on skipped frames so recognition_unavailable is NOT falsely set
+                out["identity"] = self._last_identity_result[session_id]
 
         return out

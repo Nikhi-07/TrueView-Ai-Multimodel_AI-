@@ -1,6 +1,7 @@
 const Session = require('../models/Session');
 const Alert = require('../models/Alert');
 const Report = require('../models/Report');
+const Room = require('../models/Room');
 
 // @desc    Log unified TrueView AI Engine monitoring events into MongoDB
 // @route   POST /api/ai-engine/log
@@ -11,6 +12,8 @@ const logUnifiedEvent = async (req, res, next) => {
       session_id,
       user_id = 'candidate_01',
       session_type = 'EXAM',
+      roomId,
+      roomTitle,
       identity,
       liveness,
       attention,
@@ -28,32 +31,68 @@ const logUnifiedEvent = async (req, res, next) => {
 
     const currentRiskScore = Math.round(risk?.score ?? risk?.current ?? 0);
     const riskLevel = risk?.level ?? 'NORMAL';
+    const userId = req.user ? String(req.user._id || req.user.id) : user_id;
+    const userName = req.user?.fullName || req.user?.name || 'Student Candidate';
+    const userEmail = req.user?.email || 'student@trueview.ai';
+    const mode = (session_type || 'EXAM').toUpperCase();
+
+    const identStatusRaw = identity?.status || (identity?.verified ? 'VERIFIED' : (identity?.face_detected === false ? 'FACE_NOT_DETECTED' : 'UNKNOWN'));
+    const isIdentityMismatch = identStatusRaw === 'IDENTITY_MISMATCH' || identStatusRaw === 'POSSIBLE_USER_REPLACEMENT' || identStatusRaw === 'MISMATCH';
+    const isIdentityVerified = identStatusRaw === 'IDENTITY_VERIFIED' || identStatusRaw === 'IDENTITY_CONSISTENT' || identStatusRaw === 'VERIFIED' || Boolean(identity?.verified);
+    const isFaceNotDetected = identStatusRaw === 'FACE_NOT_DETECTED' || identity?.face_detected === false;
+
+    let effectiveIdentityStatus = 'UNKNOWN';
+    if (isFaceNotDetected) effectiveIdentityStatus = 'FACE_NOT_DETECTED';
+    else if (isIdentityMismatch) effectiveIdentityStatus = 'MISMATCH';
+    else if (isIdentityVerified) effectiveIdentityStatus = 'VERIFIED';
 
     // Find or create session record
     let session = await Session.findOne({ sessionId: session_id });
     if (!session) {
       session = await Session.create({
         sessionId: session_id,
-        userId: user_id,
-        userName: req.user?.fullName || 'Student Candidate',
-        userEmail: req.user?.email || 'student@trueview.ai',
-        mode: session_type,
+        userId,
+        userName,
+        userEmail,
+        mode,
+        sessionType: mode,
+        roomId: roomId || null,
+        roomTitle: roomTitle || null,
         status: 'ACTIVE',
         startTime: new Date(),
         peakRiskScore: currentRiskScore,
+        identityStatus: effectiveIdentityStatus,
+        identityMismatchCount: isIdentityMismatch ? 1 : 0,
+        lastIdentityVerifiedAt: isIdentityVerified ? new Date() : null,
+        lastIdentityMismatchAt: isIdentityMismatch ? new Date() : null,
       });
     } else {
       if (currentRiskScore > session.peakRiskScore) {
         session.peakRiskScore = currentRiskScore;
       }
       if (environment?.phone_detected) {
-        session.phoneDetections += 1;
+        session.phoneDetections = (session.phoneDetections || 0) + 1;
       }
       if (attention?.status === 'DISTRACTED') {
-        session.distractionCount += 1;
+        session.distractionCount = (session.distractionCount || 0) + 1;
+      }
+      if (roomId && !session.roomId) session.roomId = roomId;
+      if (roomTitle && !session.roomTitle) session.roomTitle = roomTitle;
+      if (mode && !session.mode) {
+        session.mode = mode;
+        session.sessionType = mode;
+      }
+      session.identityStatus = effectiveIdentityStatus;
+      if (isIdentityMismatch) {
+        session.identityMismatchCount = (session.identityMismatchCount || 0) + 1;
+        session.lastIdentityMismatchAt = new Date();
+      } else if (isIdentityVerified) {
+        session.lastIdentityVerifiedAt = new Date();
       }
       await session.save();
     }
+
+    const effectiveRoomId = roomId || session.roomId;
 
     // Record alerts if events present. Every transition event becomes one Alert
     // record (the client already dedupes to state transitions, so no spam), with
@@ -86,8 +125,115 @@ const logUnifiedEvent = async (req, res, next) => {
         });
 
         session.totalAlerts += 1;
+
+        // Relay live alert to Host Proctor Room via Socket.IO
+        if (effectiveRoomId) {
+          const io = req.app.get('io');
+          if (io) {
+            const alertPayload = {
+              roomId: effectiveRoomId,
+              sessionId: session_id,
+              candidateId: userId,
+              candidateName: session.userName,
+              type: evt.type,
+              eventType: evt.type,
+              severity,
+              riskScore: currentRiskScore,
+              timestamp: new Date().toISOString(),
+              message: evt.evidence || `AI detected ${evt.type.replace(/_/g, ' ')}`,
+              confidence: Number(evt.confidence) || 0.85,
+            };
+            io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', alertPayload);
+            io.to(`room_${effectiveRoomId}`).emit('proctor_alert', alertPayload);
+            io.to(`proctor:${effectiveRoomId}`).emit('AI_EVENT', alertPayload);
+            io.to(`room_${effectiveRoomId}`).emit('AI_EVENT', alertPayload);
+          }
+        }
       }
       await session.save();
+    }
+
+    // Update Room participant status & risk in MongoDB if roomId present
+    if (effectiveRoomId) {
+      try {
+        const roomDoc = await Room.findOne({
+          $or: [
+            { roomId: effectiveRoomId.toUpperCase() },
+            { joinCode: effectiveRoomId.toUpperCase() }
+          ]
+        });
+
+        if (roomDoc && roomDoc.participants) {
+          const pIndex = roomDoc.participants.findIndex(p => p.sessionId === session_id || p.id === userId || p.email === userEmail);
+          const isPhone = Boolean(environment?.phone_detected);
+          const isLive = liveness?.is_live !== false && liveness?.status !== 'spoof';
+          const isFace = identity?.face_detected !== false;
+
+          if (pIndex >= 0) {
+            roomDoc.participants[pIndex].riskScore = currentRiskScore;
+            roomDoc.participants[pIndex].riskLevel = riskLevel;
+            roomDoc.participants[pIndex].violations = session.totalAlerts;
+            roomDoc.participants[pIndex].liveness = isLive ? 'LIVE' : 'SPOOF';
+            roomDoc.participants[pIndex].faceDetected = isFace;
+            roomDoc.participants[pIndex].phoneDetected = isPhone;
+            roomDoc.participants[pIndex].identityStatus = effectiveIdentityStatus;
+            if (isIdentityMismatch) {
+              roomDoc.participants[pIndex].identityMismatchCount = (roomDoc.participants[pIndex].identityMismatchCount || 0) + 1;
+            }
+            roomDoc.participants[pIndex].status = 'MONITORING';
+            if (attention?.gaze_direction) roomDoc.participants[pIndex].gaze = attention.gaze_direction;
+            if (attention?.head_pose) roomDoc.participants[pIndex].pose = attention.head_pose;
+          } else {
+            roomDoc.participants.push({
+              id: userId,
+              sessionId: session_id,
+              name: session.userName,
+              email: session.userEmail,
+              status: 'MONITORING',
+              riskScore: currentRiskScore,
+              riskLevel,
+              violations: session.totalAlerts,
+              liveness: isLive ? 'LIVE' : 'SPOOF',
+              faceDetected: isFace,
+              phoneDetected: isPhone,
+              identityStatus: effectiveIdentityStatus,
+              identityMismatchCount: isIdentityMismatch ? 1 : 0,
+              gaze: attention?.gaze_direction || 'center',
+              pose: attention?.head_pose || 'Looking Straight',
+              joinedAt: new Date()
+            });
+          }
+          await roomDoc.save();
+
+          const io = req.app.get('io');
+          if (io) {
+            io.to(`proctor:${effectiveRoomId}`).emit('participant_risk_updated', {
+              participantId: userId,
+              sessionId: session_id,
+              riskScore: currentRiskScore,
+              riskLevel,
+              identityStatus: effectiveIdentityStatus,
+              violations: session.totalAlerts,
+              phoneDetected: isPhone,
+              liveness: isLive ? 'LIVE' : 'SPOOF',
+              participants: roomDoc.participants,
+            });
+            io.to(`room_${effectiveRoomId}`).emit('participant_risk_updated', {
+              participantId: userId,
+              sessionId: session_id,
+              riskScore: currentRiskScore,
+              riskLevel,
+              identityStatus: effectiveIdentityStatus,
+              violations: session.totalAlerts,
+              phoneDetected: isPhone,
+              liveness: isLive ? 'LIVE' : 'SPOOF',
+              participants: roomDoc.participants,
+            });
+          }
+        }
+      } catch (rErr) {
+        console.warn('[logUnifiedEvent] Error updating room participant telemetry:', rErr.message);
+      }
     }
 
     // Broadcast live update to any active dashboards connected via Socket.IO
@@ -287,7 +433,13 @@ const getSessions = async (req, res, next) => {
     let query = {};
 
     if (req.user && req.user.role !== 'admin') {
-      query.userEmail = req.user.email;
+      const userConditions = [
+        { userEmail: req.user.email },
+        { userEmail: req.user.email.toLowerCase() },
+      ];
+      if (req.user._id) userConditions.push({ userId: String(req.user._id) });
+      if (req.user.id) userConditions.push({ userId: String(req.user.id) });
+      query.$or = userConditions;
     }
 
     if (filter === 'ACTIVE') {
@@ -297,12 +449,23 @@ const getSessions = async (req, res, next) => {
     }
 
     if (search) {
-      query.$or = [
+      const searchConditions = [
         { sessionId: { $regex: search, $options: 'i' } },
         { userName: { $regex: search, $options: 'i' } },
         { userEmail: { $regex: search, $options: 'i' } },
         { mode: { $regex: search, $options: 'i' } },
+        { roomTitle: { $regex: search, $options: 'i' } },
       ];
+      if (query.$or) {
+        const userOr = query.$or;
+        delete query.$or;
+        query.$and = [
+          { $or: userOr },
+          { $or: searchConditions }
+        ];
+      } else {
+        query.$or = searchConditions;
+      }
     }
 
     const sessions = await Session.find(query).sort({ createdAt: -1 });
@@ -329,7 +492,7 @@ const getSessionById = async (req, res, next) => {
       timestamp: a.timestamp,
       type: a.eventType || a.type,
       severity: a.severity,
-      evidence: a.evidence,
+      evidence: a.evidence || a.description || '',
       status: a.status,
     }));
 
@@ -353,9 +516,18 @@ const path = require('path');
 const uploadSessionRecording = async (req, res, next) => {
   try {
     const { sessionId } = req.params;
-    const session = await Session.findOne({ sessionId });
+    let session = await Session.findOne({ sessionId });
     if (!session) {
-      return res.status(404).json({ success: false, message: 'Session not found' });
+      session = await Session.findOne({ sessionId: { $regex: `^${sessionId}$`, $options: 'i' } });
+    }
+    if (!session) {
+      session = await Session.create({
+        sessionId,
+        status: 'COMPLETED',
+        startTime: new Date(),
+        userName: req.user?.fullName || req.user?.name || 'Student Candidate',
+        userEmail: req.user?.email || 'student@trueview.ai',
+      });
     }
 
     const recordingsDir = path.join(__dirname, '..', 'uploads', 'recordings');
@@ -414,7 +586,16 @@ const endSession = async (req, res, next) => {
     const { sessionId } = req.params;
     let session = await Session.findOne({ sessionId });
     if (!session) {
-      return res.status(404).json({ success: false, message: 'Session not found' });
+      session = await Session.findOne({ sessionId: { $regex: `^${sessionId}$`, $options: 'i' } });
+    }
+    if (!session) {
+      session = await Session.create({
+        sessionId,
+        status: 'COMPLETED',
+        startTime: new Date(),
+        userName: req.user?.fullName || req.user?.name || 'Student Candidate',
+        userEmail: req.user?.email || 'student@trueview.ai',
+      });
     }
 
     session.endTime = new Date();
@@ -425,14 +606,14 @@ const endSession = async (req, res, next) => {
     const alerts = await Alert.find({ sessionId });
     const violationAlerts = alerts.filter(a => ['CRITICAL', 'HIGH', 'MEDIUM'].includes(String(a.severity).toUpperCase()));
     const totalViolations = violationAlerts.length;
-    const phoneDetections = session.phoneDetections || alerts.filter(a => a.type === 'PHONE_DETECTED').length;
+    const phoneDetections = session.phoneDetections || alerts.filter(a => a.type === 'PHONE_DETECTED' || a.eventType === 'PHONE_DETECTED').length;
 
     let score = 100 - (phoneDetections * 25) - (totalViolations * 5);
     score = Math.max(0, Math.min(100, score));
     session.overallIntegrityScore = score;
     await session.save();
 
-    // Create Report
+    // Create or update Report
     const reportId = `RPT-${Date.now().toString().slice(-6)}`;
     const status = score < 60 ? 'FLAGGED' : score < 85 ? 'REVIEW_REQUIRED' : 'PASSED';
     const riskLevel = score < 60 ? 'HIGH_RISK' : score < 85 ? 'MEDIUM_RISK' : 'NORMAL';
@@ -444,7 +625,7 @@ const endSession = async (req, res, next) => {
         timestamp: a.timestamp,
         eventType: a.eventType || a.type,
         severity: a.severity,
-        description: a.evidence || '',
+        description: a.evidence || a.description || '',
         confidence: a.confidence,
       }));
 
@@ -455,7 +636,7 @@ const endSession = async (req, res, next) => {
         sessionId,
         userName: session.userName,
         userEmail: session.userEmail,
-        sessionType: session.mode,
+        sessionType: session.mode || session.sessionType || 'EXAM',
         startTime: session.startTime,
         endTime: session.endTime,
         durationSeconds,
@@ -466,12 +647,22 @@ const endSession = async (req, res, next) => {
         alerts: alerts.map(a => ({
           eventType: a.eventType || a.type,
           severity: a.severity,
-          evidence: a.evidence,
+          evidence: a.evidence || a.description || '',
           timestamp: a.timestamp,
         })),
         timeline,
         status,
       });
+    } else {
+      report.endTime = session.endTime;
+      report.durationSeconds = durationSeconds;
+      report.overallIntegrityScore = score;
+      report.riskLevel = riskLevel;
+      report.totalViolations = totalViolations;
+      report.phoneDetections = phoneDetections;
+      report.status = status;
+      report.timeline = timeline;
+      await report.save();
     }
 
     res.json({

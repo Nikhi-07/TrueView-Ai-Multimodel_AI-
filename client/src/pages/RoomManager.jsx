@@ -2,12 +2,13 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { 
-  Video, Users, Plus, Shield, Square, AlertTriangle, Volume2, Copy, Search, RefreshCw, PhoneOff, FileText
+  Video, Users, Plus, Shield, Square, AlertTriangle, Volume2, Copy, Search, 
+  RefreshCw, PhoneOff, FileText, Share2, Check, ExternalLink, Sparkles, Clock, Calendar
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PageHeader from '../components/Cards/PageHeader';
 import StatusBadge from '../components/Cards/StatusBadge';
-import CameraFeed from '../components/Camera/CameraFeed';
+import api from '../services/api';
 
 const MODES = [
   { id: 'EXAM', label: 'Examination (Strict)', badge: 'danger' },
@@ -21,8 +22,9 @@ export default function RoomManager() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [rooms, setRooms] = useState([]);
-  const [activeRoom, setActiveRoom] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createdRoomModal, setCreatedRoomModal] = useState(null); // Shareable Link Modal
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMode, setFilterMode] = useState('ALL');
 
@@ -30,51 +32,30 @@ export default function RoomManager() {
   const [newTitle, setNewTitle] = useState('');
   const [newMode, setNewMode] = useState('EXAM');
   const [maxParticipants, setMaxParticipants] = useState(30);
+  const [durationMinutes, setDurationMinutes] = useState(60);
+  const [scheduledAt, setScheduledAt] = useState('');
   const [voiceAlerts, setVoiceAlerts] = useState(true);
+  const [creating, setCreating] = useState(false);
 
-  // Host Action Alerts
+  // Toast Notification
   const [toastMsg, setToastMsg] = useState(null);
-
-  const formatTime = (date) => {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
+  const [copiedId, setCopiedId] = useState(null);
 
   useEffect(() => {
     fetchRooms();
   }, []);
 
   const fetchRooms = async () => {
+    setLoading(true);
     try {
-      const res = await fetch('/api/rooms');
-      const data = await res.json();
-      if (data.success) {
-        setRooms(data.rooms);
+      const res = await api.get('/rooms');
+      if (res.data.success && Array.isArray(res.data.rooms)) {
+        setRooms(res.data.rooms);
       }
     } catch (_) {}
-  };
-
-  const handleCreateRoom = async (e) => {
-    e.preventDefault();
-    try {
-      const res = await fetch('/api/rooms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: newTitle || 'Untitled Room',
-          mode: newMode,
-          maxParticipants: Number(maxParticipants),
-          voiceAlerts: voiceAlerts
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setRooms(prev => [data.room, ...prev]);
-        setShowCreateModal(false);
-        setNewTitle('');
-        setActiveRoom(data.room);
-        showNotification(`Room ${data.room.id} created successfully!`);
-      }
-    } catch (_) {}
+    finally {
+      setLoading(false);
+    }
   };
 
   const showNotification = (msg) => {
@@ -82,31 +63,94 @@ export default function RoomManager() {
     setTimeout(() => setToastMsg(null), 3500);
   };
 
-  const copyRoomLink = (roomId) => {
-    navigator.clipboard.writeText(`${window.location.origin}/proctor-room/${roomId}`);
-    showNotification(`Participant invite link ${roomId} copied to clipboard!`);
+  const getFullJoinUrl = (room) => {
+    const roomId = room.roomId || room.id;
+    const token = room.joinCode || room.joinToken || '';
+    // Prefer window.location.origin so it automatically adopts LAN IP or hostname
+    const origin = window.location.origin;
+    return `${origin}/join/${roomId}${token ? `?token=${token}` : ''}`;
   };
 
-  const triggerLivenessChallenge = (candidateName) => {
-    showNotification(`Sent Active Liveness Challenge to ${candidateName}!`);
+  const handleCreateRoom = async (e) => {
+    e.preventDefault();
+    setCreating(true);
+    try {
+      const res = await api.post('/rooms', {
+        title: newTitle.trim() || 'New Monitored Session',
+        mode: newMode,
+        maxParticipants: Number(maxParticipants) || 30,
+        durationMinutes: Number(durationMinutes) || 60,
+        scheduledAt: scheduledAt || null,
+        voiceAlerts: voiceAlerts,
+      });
+
+      if (res.data.success && res.data.room) {
+        const created = res.data.room;
+        setRooms((prev) => [created, ...prev]);
+        setShowCreateModal(false);
+        setNewTitle('');
+        setScheduledAt('');
+        setCreatedRoomModal(created);
+        showNotification(`Room ${created.roomId || created.id} created successfully!`);
+      }
+    } catch (err) {
+      showNotification(err.response?.data?.message || 'Failed to create room');
+    } finally {
+      setCreating(false);
+    }
   };
 
-  const issueWarning = (candidateName) => {
-    showNotification(`Official Warning issued to ${candidateName}!`);
+  const copyToClipboard = async (text, id = null) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      if (id) setCopiedId(id);
+      showNotification('Room link copied!');
+      setTimeout(() => setCopiedId(null), 2500);
+    } catch (_) {
+      showNotification('Failed to copy room link.');
+    }
   };
 
-  const kickCandidate = (candidateId) => {
-    if (!activeRoom) return;
-    setActiveRoom(prev => ({
-      ...prev,
-      participants: prev.participants.filter(p => p.id !== candidateId),
-      participantsCount: Math.max(0, prev.participantsCount - 1)
-    }));
-    showNotification(`Candidate suspended from room.`);
+  const shareJoinLink = async (room) => {
+    const joinUrl = getFullJoinUrl(room);
+    const title = room.title || 'TrueView AI Proctor Room';
+    const text = `Join TrueView AI Proctoring Session:\n"${title}"\nMode: ${room.mode}\nRoom ID: ${room.roomId || room.id}\nJoin Link: ${joinUrl}`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title,
+          text,
+          url: joinUrl,
+        });
+        showNotification('Room link copied!');
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          copyToClipboard(joinUrl, room.roomId || room.id);
+        }
+      }
+    } else {
+      copyToClipboard(joinUrl, room.roomId || room.id);
+    }
   };
 
-  const filteredRooms = rooms.filter(r => {
-    const matchesSearch = r.title.toLowerCase().includes(searchTerm.toLowerCase()) || r.id.toLowerCase().includes(searchTerm.toLowerCase());
+  const handleCandidateJoin = (room) => {
+    const roomId = room.roomId || room.id;
+    const token = room.joinCode || '';
+    navigate(`/join/${roomId}${token ? `?token=${token}` : ''}`);
+  };
+
+  const handleHostOpenRoom = (room) => {
+    const roomId = room.roomId || room.id;
+    navigate(`/proctor-room-host/${roomId}`);
+  };
+
+  const filteredRooms = rooms.filter((r) => {
+    const rId = r.roomId || r.id || '';
+    const rTitle = r.title || '';
+    const matchesSearch =
+      rTitle.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      rId.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesMode = filterMode === 'ALL' || r.mode === filterMode;
     return matchesSearch && matchesMode;
   });
@@ -115,12 +159,12 @@ export default function RoomManager() {
     <div className="space-y-6">
       <PageHeader
         title="Virtual Proctoring Room Manager"
-        subtitle="Host Zoom/Meet-style interactive AI proctoring rooms for Exams, Interviews, & Classes."
+        subtitle="Host Zoom/Meet-style interactive AI proctoring rooms with shareable links, public onboarding, and real-time host alerts."
         breadcrumb={['TrueView AI', 'Virtual Rooms']}
         actions={
           <button
             onClick={() => setShowCreateModal(true)}
-            className="btn-primary py-2 px-4 flex items-center gap-2 text-sm font-semibold"
+            className="btn-primary py-2 px-4 flex items-center gap-2 text-sm font-bold bg-slate-900 text-white hover:bg-slate-800 shadow-md cursor-pointer"
           >
             <Plus size={16} />
             Create Proctor Room
@@ -130,282 +174,245 @@ export default function RoomManager() {
 
       {/* Notification Toast */}
       {toastMsg && (
-        <div className="fixed top-20 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-lg border border-slate-700 text-xs font-semibold shadow-xl flex items-center gap-3 animate-fade-in">
+        <div className="fixed top-20 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl border border-slate-700 text-xs font-semibold shadow-2xl flex items-center gap-3 animate-fade-in">
           <Shield size={16} className="text-emerald-400" />
           <span>{toastMsg}</span>
         </div>
       )}
 
-      {/* ACTIVE ROOM VIEW (Zoom / Meet Style) */}
-      {activeRoom ? (
-        <div className="fixed inset-0 z-[100] bg-[#202124] text-white flex flex-col font-sans overflow-hidden">
-          
-          {/* Top Bar */}
-          <div className="h-14 px-6 flex items-center justify-between shrink-0 bg-gradient-to-b from-black/60 to-transparent absolute top-0 left-0 right-0 z-10 pointer-events-none">
-            <div className="flex items-center gap-3">
-              <span className="px-2.5 py-1 bg-red-600 rounded text-xs font-bold tracking-widest animate-pulse">REC</span>
-              <h2 className="text-sm font-semibold">{activeRoom.title}</h2>
-              <span className="text-xs text-gray-400 font-mono">({activeRoom.id})</span>
-            </div>
+      {/* Controls & Filter Bar */}
+      <div className="flex flex-col sm:flex-row gap-4 justify-between items-stretch sm:items-center bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+          <input
+            type="text"
+            placeholder="Search by room title, ID, or mode..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400 transition"
+          />
+        </div>
+
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
+          <button
+            onClick={() => setFilterMode('ALL')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition cursor-pointer ${
+              filterMode === 'ALL'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            All Modes
+          </button>
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              onClick={() => setFilterMode(m.id)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition cursor-pointer ${
+                filterMode === m.id
+                  ? 'bg-slate-900 text-white shadow-sm'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              {m.id}
+            </button>
+          ))}
+          <button
+            onClick={fetchRooms}
+            disabled={loading}
+            className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 transition cursor-pointer ml-1"
+            title="Refresh Rooms List"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+      </div>
+
+      {/* Grid of Proctor Rooms */}
+      {loading ? (
+        <div className="py-24 text-center space-y-3">
+          <div className="w-8 h-8 border-2 border-slate-900 border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-xs text-slate-500 font-medium">Loading virtual proctor rooms...</p>
+        </div>
+      ) : filteredRooms.length === 0 ? (
+        <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center space-y-4 shadow-sm">
+          <div className="w-14 h-14 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+            <Video size={24} />
           </div>
-
-          {/* Video Grid Area */}
-          <div className="flex-1 p-6 flex flex-col justify-center items-center relative overflow-hidden min-h-0 pt-16 pb-24">
-             <div className={`w-full max-w-7xl grid gap-4 place-content-center h-full ${
-               activeRoom.participants?.length > 3 ? 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4' :
-               activeRoom.participants?.length > 1 ? 'grid-cols-2 lg:grid-cols-3' : 
-               'grid-cols-1 md:grid-cols-2'
-             }`}>
-                
-                {/* Host Live Feed */}
-                <div className="relative bg-[#3c4043] rounded-xl overflow-hidden shadow-xl aspect-video border border-[#5f6368]/30 flex flex-col group">
-                  <div className="absolute inset-0 z-0">
-                    <CameraFeed isActive={true} />
-                  </div>
-                  <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg flex items-center gap-2 z-10 border border-white/10">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]"></span>
-                    <span className="text-xs font-semibold text-white">Host (You)</span>
-                  </div>
-                </div>
-
-                {/* Candidate Participants */}
-                {activeRoom.participants?.map((candidate, idx) => {
-                  const isHighRisk = candidate.riskLevel?.includes('HIGH') || candidate.riskScore > 50;
-
-                  return (
-                    <div
-                      key={candidate.id || idx}
-                      className={`relative bg-[#3c4043] rounded-xl overflow-hidden shadow-xl aspect-video border transition-colors flex items-center justify-center group ${
-                        isHighRisk ? 'border-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.2)]' : 'border-[#5f6368]/30'
-                      }`}
-                    >
-                      {/* Placeholder for Candidate Video Feed */}
-                      <div className="w-20 h-20 rounded-full bg-blue-600 flex items-center justify-center text-3xl font-normal text-white shadow-lg">
-                        {candidate.name.charAt(0)}
-                      </div>
-
-                      {/* Overlays */}
-                      <div className="absolute top-3 right-3 flex flex-col gap-2 items-end z-10">
-                         {isHighRisk && (
-                           <div className="bg-rose-600/90 backdrop-blur-md text-white text-[10px] font-bold px-2.5 py-1 rounded shadow-lg border border-rose-500/50 flex items-center gap-1.5">
-                             <AlertTriangle size={10} /> High Risk
-                           </div>
-                         )}
-                         {candidate.phoneDetected && (
-                           <div className="bg-orange-500/90 backdrop-blur-md text-white text-[10px] font-bold px-2.5 py-1 rounded shadow-lg border border-orange-400/50 flex items-center gap-1.5">
-                             <PhoneOff size={10} /> Phone
-                           </div>
-                         )}
-                      </div>
-
-                      <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg flex items-center gap-2 z-10 border border-white/10">
-                        <span className="text-xs font-semibold text-white truncate max-w-[120px]">{candidate.name}</span>
-                        <div className="w-px h-3 bg-gray-500 mx-1"></div>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${isHighRisk ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                          Risk: {candidate.riskScore}%
-                        </span>
-                      </div>
-
-                      {/* Hover Actions */}
-                      <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] opacity-0 group-hover:opacity-100 transition-opacity z-20 flex items-center justify-center gap-3">
-                        <button
-                          onClick={() => triggerLivenessChallenge(candidate.name)}
-                          className="w-10 h-10 rounded-full bg-white/10 hover:bg-blue-500 text-white flex items-center justify-center transition-colors"
-                          title="Trigger Liveness Check"
-                        >
-                          <RefreshCw size={16} />
-                        </button>
-                        <button
-                          onClick={() => issueWarning(candidate.name)}
-                          className="w-10 h-10 rounded-full bg-white/10 hover:bg-amber-500 text-white flex items-center justify-center transition-colors"
-                          title="Issue Warning"
-                        >
-                          <AlertTriangle size={16} />
-                        </button>
-                        <button
-                          onClick={() => kickCandidate(candidate.id)}
-                          className="w-10 h-10 rounded-full bg-white/10 hover:bg-rose-600 text-white flex items-center justify-center transition-colors"
-                          title="Kick Candidate"
-                        >
-                          <Square size={16} />
-                        </button>
-                      </div>
-
-                    </div>
-                  );
-                })}
-             </div>
+          <div>
+            <h3 className="text-base font-bold text-slate-800">No Proctor Rooms Found</h3>
+            <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+              Create a new proctor room to host Zoom/Meet-style AI monitored sessions.
+            </p>
           </div>
-
-          {/* Bottom Control Bar */}
-          <div className="h-20 bg-[#202124] px-6 flex items-center justify-between shrink-0 absolute bottom-0 left-0 right-0 z-50">
-            
-            <div className="flex items-center gap-4 w-64 text-[#9aa0a6]">
-              <span className="text-sm font-medium">{formatTime(new Date())}</span>
-              <div className="w-px h-4 bg-[#5f6368]"></div>
-              <span className="text-sm font-medium">{activeRoom.mode} Mode</span>
-            </div>
-
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => copyRoomLink(activeRoom.id)}
-                className="w-12 h-12 rounded-full bg-[#3c4043] hover:bg-[#4a4d51] text-white flex items-center justify-center transition-colors tooltip"
-                title="Copy Invite Link"
-              >
-                <Copy size={20} />
-              </button>
-              
-              <button
-                onClick={() => showNotification("Broadcasting warning to all participants...")}
-                className="w-12 h-12 rounded-full bg-[#3c4043] hover:bg-amber-600 text-white flex items-center justify-center transition-colors tooltip"
-                title="Broadcast Audio Warning"
-              >
-                <Volume2 size={20} />
-              </button>
-
-              <button
-                onClick={() => setActiveRoom(null)}
-                className="w-16 h-10 rounded-full bg-[#ea4335] hover:bg-[#d93025] text-white flex items-center justify-center transition-colors shadow-lg px-6"
-                title="End Session"
-              >
-                <PhoneOff size={22} />
-              </button>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 w-64 text-[#9aa0a6]">
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-[#3c4043] rounded-lg text-sm">
-                 <Users size={16} />
-                 <span>{activeRoom.participants?.length || 0} / {activeRoom.maxParticipants}</span>
-              </div>
-            </div>
-
-          </div>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="btn-primary py-2 px-4 text-xs font-bold inline-flex items-center gap-2"
+          >
+            <Plus size={14} />
+            Create First Room
+          </button>
         </div>
       ) : (
-        /* ROOMS LIST VIEW */
-        <div className="space-y-4">
-          <div className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm">
-            <div className="relative w-full md:w-72">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search rooms..."
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                className="input-glass pl-9 py-1.5 text-xs text-slate-900"
-              />
-            </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {filteredRooms.map((room) => {
+            const roomId = room.roomId || room.id;
+            const joinUrl = getFullJoinUrl(room);
+            const isEnded = room.status === 'ENDED';
+            const participantsCount = room.participantsCount || (room.participants?.filter(p => p.status !== 'LEFT').length) || 0;
+            const maxCapacity = room.maxParticipants || 30;
+            const isRoomFull = participantsCount >= maxCapacity;
 
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                onClick={() => setFilterMode('ALL')}
-                className={`text-xs px-3 py-1.5 rounded-lg border font-medium ${filterMode === 'ALL' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'}`}
-              >
-                All Modes
-              </button>
-              {MODES.map(m => (
-                <button
-                  key={m.id}
-                  onClick={() => setFilterMode(m.id)}
-                  className={`text-xs px-3 py-1.5 rounded-lg border font-medium ${filterMode === m.id ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'}`}
-                >
-                  {m.id}
-                </button>
-              ))}
-            </div>
-          </div>
+            const currentUserId = user?._id || user?.id;
+            const isHost = Boolean(
+              user && (
+                user.role === 'admin' ||
+                (currentUserId && (room.host?.id === currentUserId || room.hostId === currentUserId || String(room.host) === String(currentUserId))) ||
+                (user.email && (room.host?.email === user.email || room.hostEmail === user.email))
+              )
+            );
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredRooms.map(room => (
+            return (
               <div
-                key={room.id}
-                className="bg-white border border-slate-200 rounded-xl p-5 space-y-4 flex flex-col justify-between shadow-sm hover:border-slate-300 transition-all"
+                key={roomId}
+                className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4 flex flex-col justify-between shadow-sm hover:shadow-md hover:border-slate-300 transition-all group"
               >
-                <div className="space-y-2">
+                <div className="space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-mono font-bold text-slate-800 px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
-                      {room.id}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono font-bold text-slate-900 px-2.5 py-1 rounded-md bg-slate-100 border border-slate-200">
+                        {roomId}
+                      </span>
+                      {room.joinCode && (
+                        <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-semibold" title="Public Join Code">
+                          Code: {room.joinCode}
+                        </span>
+                      )}
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${isEnded ? 'bg-slate-100 text-slate-500 border-slate-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                      {room.status || 'ACTIVE'}
                     </span>
-                    <span className="badge-neutral">{room.mode}</span>
                   </div>
-                  <h3 className="text-base font-bold text-slate-900 line-clamp-1">{room.title}</h3>
-                  <p className="text-xs text-slate-500">Host: <b>{room.host}</b></p>
+
+                  <h3 className="text-base font-bold text-slate-900 line-clamp-1 group-hover:text-slate-800">
+                    {room.title}
+                  </h3>
+
+                  <div className="text-xs text-slate-500 space-y-1">
+                    <p>Host: <span className="font-semibold text-slate-700">{room.hostName || room.host?.name || 'Session Host'}</span></p>
+                    <div className="flex items-center gap-4 text-[11px] text-slate-400">
+                      <span className="flex items-center gap-1 font-medium text-slate-600">
+                        <Users size={12} className={isRoomFull ? 'text-amber-600' : 'text-slate-500'} /> {participantsCount} / {maxCapacity}
+                      </span>
+                      <span className="flex items-center gap-1 font-medium text-slate-600">
+                        <Clock size={12} className="text-slate-500" /> {room.durationMinutes || 60} mins
+                      </span>
+                      <span className="font-bold text-slate-800">{room.mode}</span>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="space-y-3 pt-3 border-t border-slate-100">
-                  <div className="flex items-center justify-between text-xs text-slate-600">
-                    <span className="flex items-center gap-1.5">
-                      <Users size={14} />
-                      Participants: <b>{room.participantsCount || 1} / {room.maxParticipants}</b>
-                    </span>
-                    <span className="badge-success">{room.status}</span>
-                  </div>
-
-                  <div className="flex flex-col space-y-2">
+                <div className="space-y-2.5 pt-3 border-t border-slate-100">
+                  {/* Host Launch Dashboard Button (Host / Admin Only) */}
+                  {isHost && (
                     <button
-                      onClick={() => navigate(`/proctor-room/${room.id}`)}
-                      className="btn-primary w-full py-2 text-xs flex items-center justify-center gap-2 font-bold bg-black text-white hover:bg-zinc-800 shadow-sm"
+                      onClick={() => handleHostOpenRoom(room)}
+                      className="w-full py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                      title="Open Real-Time Host Monitoring Dashboard"
                     >
-                      <Video size={14} />
-                      Join Monitored Session
+                      <Shield size={14} className="text-emerald-400" />
+                      <span>Open Host Dashboard</span>
+                    </button>
+                  )}
+
+                  {/* Participant Action Buttons: Join, Link, Share */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {/* Join Button */}
+                    {isEnded ? (
+                      <button
+                        disabled
+                        className="py-2 px-2 rounded-xl bg-slate-100 border border-slate-200 text-slate-400 text-[11px] font-bold flex items-center justify-center gap-1 cursor-not-allowed select-none"
+                        title="This proctoring session has ended"
+                      >
+                        <Square size={12} className="text-slate-400" />
+                        <span>ENDED</span>
+                      </button>
+                    ) : isRoomFull ? (
+                      <button
+                        disabled
+                        className="py-2 px-1 rounded-xl bg-amber-50 border border-amber-300 text-amber-800 text-[10px] font-bold flex items-center justify-center gap-1 cursor-not-allowed select-none"
+                        title="Room has reached maximum capacity"
+                      >
+                        <Users size={12} className="text-amber-600" />
+                        <span>ROOM FULL</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleCandidateJoin(room)}
+                        className="py-2 px-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 border border-emerald-700 text-white text-[11px] font-bold flex items-center justify-center gap-1 transition-all shadow-sm hover:shadow cursor-pointer"
+                        title="Join Proctoring Session as Candidate"
+                      >
+                        <Video size={12} />
+                        <span>Join</span>
+                      </button>
+                    )}
+
+                    {/* Link Button */}
+                    <button
+                      onClick={() => copyToClipboard(joinUrl, roomId)}
+                      className="py-2 px-2 rounded-xl bg-white hover:bg-slate-100 active:bg-slate-200 border border-slate-300 hover:border-slate-400 text-slate-800 text-[11px] font-bold flex items-center justify-center gap-1 transition-all shadow-sm cursor-pointer"
+                      title="Copy Public Invitation Link"
+                    >
+                      {copiedId === roomId ? <Check size={12} className="text-emerald-600 font-bold" /> : <Copy size={12} className="text-slate-600" />}
+                      <span className={copiedId === roomId ? 'text-emerald-700 font-bold' : ''}>
+                        {copiedId === roomId ? 'Copied!' : 'Link'}
+                      </span>
                     </button>
 
-                    {/* Host & Reviewer Admin Controls (Only visible to Host/Admin) */}
-                    {(user?.role === 'admin' || user?.role === 'host' || room.host?.includes(user?.name || 'You')) && (
-                      <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
-                        <button
-                          onClick={() => navigate(`/proctor-room/${room.id}?role=reviewer`)}
-                          className="flex-1 py-1.5 px-2.5 text-xs flex items-center justify-center gap-1.5 font-bold bg-zinc-100 hover:bg-zinc-200 border border-zinc-300 text-zinc-900 rounded-lg transition"
-                          title="Launch Host Proctoring Dashboard"
-                        >
-                          <Shield size={13} className="text-emerald-600" />
-                          <span>Host Dashboard</span>
-                        </button>
-
-                        <button
-                          onClick={() => navigate('/reports')}
-                          className="py-1.5 px-2.5 text-xs flex items-center justify-center gap-1 font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg transition"
-                          title="View Proctoring Reports"
-                        >
-                          <FileText size={13} />
-                          <span>Reports</span>
-                        </button>
-
-                        <button
-                          onClick={() => copyRoomLink(room.id)}
-                          className="py-1.5 px-2.5 text-xs flex items-center justify-center gap-1 font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg transition"
-                          title="Copy Participant Invite Link"
-                        >
-                          <Copy size={13} />
-                        </button>
-                      </div>
-                    )}
+                    {/* Share Button */}
+                    <button
+                      onClick={() => shareJoinLink(room)}
+                      className="py-2 px-2 rounded-xl bg-white hover:bg-slate-100 active:bg-slate-200 border border-slate-300 hover:border-slate-400 text-slate-800 text-[11px] font-bold flex items-center justify-center gap-1 transition-all shadow-sm cursor-pointer"
+                      title="Share Room Invitation Link"
+                    >
+                      <Share2 size={12} className="text-slate-600" />
+                      <span>Share</span>
+                    </button>
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
       )}
 
       {/* CREATE ROOM MODAL */}
       <AnimatePresence>
         {showCreateModal && (
-          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white p-6 rounded-xl max-w-md w-full border border-slate-200 space-y-5 shadow-2xl"
+              className="bg-white p-6 md:p-8 rounded-2xl max-w-lg w-full border border-slate-200 space-y-6 shadow-2xl"
             >
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Video size={18} className="text-slate-800" />
-                  Create Virtual Proctoring Room
-                </h3>
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-slate-900 text-white">
+                    <Video size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">
+                      Create Proctoring Room
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Generate a secure Zoom-style room with shareable candidate link.
+                    </p>
+                  </div>
+                </div>
                 <button
                   onClick={() => setShowCreateModal(false)}
-                  className="text-slate-400 hover:text-slate-700 text-sm"
+                  className="text-slate-400 hover:text-slate-700 text-sm p-1 rounded-lg hover:bg-slate-100 transition cursor-pointer"
                 >
                   ✕
                 </button>
@@ -413,52 +420,94 @@ export default function RoomManager() {
 
               <form onSubmit={handleCreateRoom} className="space-y-4">
                 <div>
-                  <label className="text-xs font-semibold text-slate-700 block mb-1">Room Title</label>
+                  <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                    Room Title
+                  </label>
                   <input
                     type="text"
                     required
-                    placeholder="e.g. CS101 Midterm Examination"
+                    placeholder="e.g. Computer Science Final Examination"
                     value={newTitle}
-                    onChange={e => setNewTitle(e.target.value)}
-                    className="input-glass"
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900 focus:bg-white transition"
                   />
                 </div>
 
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 block mb-1">Session Mode</label>
-                  <select
-                    value={newMode}
-                    onChange={e => setNewMode(e.target.value)}
-                    className="input-glass"
-                  >
-                    {MODES.map(m => (
-                      <option key={m.id} value={m.id}>{m.label}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 block mb-1">Max Capacity (Participants)</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="500"
-                    value={maxParticipants}
-                    onChange={e => setMaxParticipants(e.target.value)}
-                    className="input-glass"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-200">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <span className="text-xs font-semibold text-slate-800 block">Loud AI Spoken Voice Alerts</span>
-                    <span className="text-[10px] text-slate-500">Speak warnings directly to participants</span>
+                    <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                      Session Mode
+                    </label>
+                    <select
+                      value={newMode}
+                      onChange={(e) => setNewMode(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:outline-none focus:border-slate-900 focus:bg-white transition cursor-pointer"
+                    >
+                      {MODES.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                      Max Participants
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="500"
+                      value={maxParticipants}
+                      onChange={(e) => setMaxParticipants(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-slate-900 focus:bg-white transition"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                      Duration (Minutes)
+                    </label>
+                    <input
+                      type="number"
+                      min="5"
+                      max="300"
+                      value={durationMinutes}
+                      onChange={(e) => setDurationMinutes(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-slate-900 focus:bg-white transition"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                      Scheduled Date & Time (Optional)
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={scheduledAt}
+                      onChange={(e) => setScheduledAt(e.target.value)}
+                      className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:border-slate-900 focus:bg-white transition cursor-pointer"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 block">
+                      Spoken AI Voice Warnings
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      Speak warnings aloud to candidates when violations occur
+                    </span>
                   </div>
                   <input
                     type="checkbox"
                     checked={voiceAlerts}
-                    onChange={e => setVoiceAlerts(e.target.checked)}
-                    className="w-4 h-4 rounded accent-slate-900"
+                    onChange={(e) => setVoiceAlerts(e.target.checked)}
+                    className="w-4 h-4 rounded accent-slate-900 cursor-pointer"
                   />
                 </div>
 
@@ -466,18 +515,110 @@ export default function RoomManager() {
                   <button
                     type="button"
                     onClick={() => setShowCreateModal(false)}
-                    className="btn-ghost flex-1 py-2 text-xs"
+                    className="flex-1 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="btn-primary flex-1 py-2 text-xs font-semibold"
+                    disabled={creating}
+                    className="flex-1 py-2.5 text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 rounded-xl transition shadow-md cursor-pointer disabled:opacity-50"
                   >
-                    Create & Launch Room
+                    {creating ? 'Creating...' : 'Create & Generate Link'}
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* SHAREABLE LINK MODAL / CARD (After Creation) */}
+      <AnimatePresence>
+        {createdRoomModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white p-6 md:p-8 rounded-2xl max-w-md w-full border border-slate-200 space-y-6 shadow-2xl text-center"
+            >
+              <div className="w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto border border-emerald-200">
+                <Check size={32} />
+              </div>
+
+              <div>
+                <span className="text-[11px] font-mono font-bold tracking-widest text-emerald-600 uppercase block mb-1">
+                  PROCTOR ROOM CREATED
+                </span>
+                <h3 className="text-xl font-extrabold text-slate-900 leading-tight">
+                  {createdRoomModal.title}
+                </h3>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-left space-y-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-medium">Mode:</span>
+                  <span className="font-bold text-slate-900">{createdRoomModal.mode}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-medium">Room ID:</span>
+                  <span className="font-mono font-bold text-slate-900">{createdRoomModal.roomId || createdRoomModal.id}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-medium">Join Code:</span>
+                  <span className="font-mono font-bold text-emerald-700 bg-emerald-100/60 px-2 py-0.5 rounded">
+                    {createdRoomModal.joinCode || 'ACTIVE'}
+                  </span>
+                </div>
+
+                <div className="pt-2 border-t border-slate-200">
+                  <span className="text-slate-500 block mb-1 font-medium">Candidate Join Link:</span>
+                  <div className="p-2.5 bg-white border border-slate-200 rounded-lg text-slate-800 font-mono text-[11px] break-all select-all">
+                    {getFullJoinUrl(createdRoomModal)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Actions: Copy Link, Share, Open Room */}
+              <div className="space-y-2.5">
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => copyToClipboard(getFullJoinUrl(createdRoomModal))}
+                    className="py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer"
+                  >
+                    <Copy size={14} />
+                    <span>Copy Link</span>
+                  </button>
+
+                  <button
+                    onClick={() => shareJoinLink(createdRoomModal)}
+                    className="py-2.5 px-4 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer"
+                  >
+                    <Share2 size={14} />
+                    <span>Share Link</span>
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => {
+                    const rId = createdRoomModal.roomId || createdRoomModal.id;
+                    setCreatedRoomModal(null);
+                    navigate(`/proctor-room-host/${rId}`);
+                  }}
+                  className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md transition cursor-pointer"
+                >
+                  <Shield size={16} className="text-emerald-400" />
+                  <span>Open Room Dashboard</span>
+                </button>
+
+                <button
+                  onClick={() => setCreatedRoomModal(null)}
+                  className="text-xs text-slate-500 hover:text-slate-800 py-1 transition cursor-pointer"
+                >
+                  Close & View All Rooms
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

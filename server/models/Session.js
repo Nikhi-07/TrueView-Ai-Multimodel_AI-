@@ -116,6 +116,27 @@ const sessionSchema = new mongoose.Schema(
       type: Number,
       default: 100,
     },
+    identityStatus: {
+      type: String,
+      enum: ['VERIFIED', 'MISMATCH', 'UNKNOWN', 'FACE_NOT_DETECTED', 'UNAVAILABLE'],
+      default: 'VERIFIED',
+    },
+    identityMismatchCount: {
+      type: Number,
+      default: 0,
+    },
+    identityMismatchDuration: {
+      type: Number,
+      default: 0,
+    },
+    lastIdentityVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+    lastIdentityMismatchAt: {
+      type: Date,
+      default: null,
+    },
     timeline: [
       {
         timestamp: { type: Date, default: Date.now },

@@ -13,6 +13,9 @@ export const SESSION_POLICIES = {
     warningLimit: 5,
     criticalLimit: 3,
     suspensionLimit: 1,
+    allowMediaToggle: false,
+    cameraRequired: true,
+    microphoneRequired: true,
     rules: {
       facePresence: { required: true, severityOnAbsence: 'HIGH' },
       identityVerification: { required: true, severityOnMismatch: 'CRITICAL' },
@@ -35,6 +38,9 @@ export const SESSION_POLICIES = {
     warningLimit: 8,
     criticalLimit: 5,
     suspensionLimit: 3,
+    allowMediaToggle: false,
+    cameraRequired: true,
+    microphoneRequired: true,
     rules: {
       facePresence: { required: true, severityOnAbsence: 'MEDIUM' },
       identityVerification: { required: true, severityOnMismatch: 'HIGH' },
@@ -57,6 +63,7 @@ export const SESSION_POLICIES = {
     warningLimit: 15,
     criticalLimit: 10,
     suspensionLimit: 5,
+    allowMediaToggle: true,
     rules: {
       facePresence: { required: true, severityOnAbsence: 'LOW' },
       identityVerification: { required: false, severityOnMismatch: 'INFO' },
@@ -79,6 +86,7 @@ export const SESSION_POLICIES = {
     warningLimit: 15,
     criticalLimit: 10,
     suspensionLimit: 5,
+    allowMediaToggle: true,
     rules: {
       facePresence: { required: true, severityOnAbsence: 'LOW' },
       identityVerification: { required: false, severityOnMismatch: 'INFO' },
@@ -101,6 +109,7 @@ export const SESSION_POLICIES = {
     warningLimit: 20,
     criticalLimit: 15,
     suspensionLimit: 10,
+    allowMediaToggle: true,
     rules: {
       facePresence: { required: true, severityOnAbsence: 'INFO' },
       identityVerification: { required: false, severityOnMismatch: 'INFO' },
@@ -123,6 +132,7 @@ export const SESSION_POLICIES = {
     warningLimit: 10,
     criticalLimit: 5,
     suspensionLimit: 3,
+    allowMediaToggle: true,
     rules: {
       facePresence: { required: true, severityOnAbsence: 'MEDIUM' },
       identityVerification: { required: true, severityOnMismatch: 'HIGH' },

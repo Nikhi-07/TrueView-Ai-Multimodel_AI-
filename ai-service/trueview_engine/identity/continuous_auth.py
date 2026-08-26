@@ -51,17 +51,15 @@ class ContinuousAuthenticator:
         # Trigger conditions for running identity verification:
         face_returned = (not prev_face_present and face_detected)
         multi_person = (face_count > 1)
-        periodic_check = (frame_index % 30 == 0)
+        has_rec_result = bool(face_rec_result and not face_rec_result.get("recognition_unavailable"))
 
-        should_check = (face_returned or multi_person or periodic_check)
+        should_check = (face_returned or multi_person or has_rec_result)
 
-        if not face_detected:
-            # If no face is present, keep existing verification status but don't flag mismatch.
-            # verified reflects only statuses that were actually PROVEN.
+        if not face_detected or (face_rec_result and face_rec_result.get("status") == "FACE_NOT_DETECTED"):
             return {
-                "status": state["status"],
-                "verified": state["status"] == "IDENTITY_CONSISTENT",
-                "confidence": state["confidence"],
+                "status": "FACE_NOT_DETECTED",
+                "verified": False,
+                "confidence": 0.0,
                 "trigger": "no_face"
             }
 
@@ -70,7 +68,7 @@ class ContinuousAuthenticator:
         if quality_eval.get("quality") in ("POOR", "UNRELIABLE"):
             return {
                 "status": "IDENTITY_UNCERTAIN",
-                "verified": state["status"] == "IDENTITY_CONSISTENT",
+                "verified": state["status"] in ("IDENTITY_CONSISTENT", "IDENTITY_VERIFIED"),
                 "confidence": state["confidence"],
                 "trigger": "poor_quality_suppressed"
             }
@@ -82,7 +80,7 @@ class ContinuousAuthenticator:
         if face_rec_result and face_rec_result.get("recognition_unavailable"):
             return {
                 "status": state["status"],
-                "verified": state["status"] == "IDENTITY_CONSISTENT",
+                "verified": state["status"] in ("IDENTITY_CONSISTENT", "IDENTITY_VERIFIED"),
                 "confidence": state["confidence"],
                 "trigger": "recognition_unavailable",
                 "recognition_unavailable": True,
@@ -90,25 +88,28 @@ class ContinuousAuthenticator:
             }
 
         if should_check and face_rec_result:
-            # Honest default: a missing verified field is treated as NOT verified
-            # (fail closed), never as verified (the previous default fabricated matches).
-            is_match = face_rec_result.get("verified", False)
-            rec_conf = face_rec_result.get("confidence", 0.0)
+            is_match = bool(face_rec_result.get("verified", False) or face_rec_result.get("status") == "VERIFIED")
+            rec_conf = float(face_rec_result.get("confidence", 0.0))
+            is_mismatch = (not is_match) and face_rec_result.get("status") == "MISMATCH"
 
             if is_match:
-                state["mismatch_counter"] = max(0, state["mismatch_counter"] - 1)
-                state["status"] = "IDENTITY_CONSISTENT"
+                state["mismatch_counter"] = 0
+                state["status"] = "IDENTITY_VERIFIED"
                 state["confidence"] = round(rec_conf, 2)
-            else:
+            elif is_mismatch:
                 state["mismatch_counter"] += 1
                 if state["mismatch_counter"] >= 3:
                     state["status"] = "POSSIBLE_USER_REPLACEMENT"
                     state["confidence"] = round(rec_conf, 2)
-                elif state["mismatch_counter"] >= 1:
+                elif state["mismatch_counter"] >= 2:
                     state["status"] = "IDENTITY_MISMATCH"
                     state["confidence"] = round(rec_conf, 2)
+                else:
+                    # Debounce single-frame noise before confirming mismatch
+                    state["status"] = "IDENTITY_UNCERTAIN"
+                    state["confidence"] = round(rec_conf, 2)
 
-        verified_bool = state["status"] == "IDENTITY_CONSISTENT"
+        verified_bool = state["status"] in ("IDENTITY_CONSISTENT", "IDENTITY_VERIFIED")
 
         return {
             "status": state["status"],

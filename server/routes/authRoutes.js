@@ -14,11 +14,13 @@ const {
   getBiometricStatus,
   faceLogin,
   voiceLogin,
-  verifySessionFace 
+  verifySessionFace,
+  getMe
 } = require('../controllers/authController');
 const { authLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
 const { protect, protectPending } = require('../middleware/authMiddleware');
 
+router.get('/me', protect, getMe);
 router.post('/register', authLimiter, register);
 router.post('/login', authLimiter, login);
 router.post('/verify-credentials', authLimiter, verifyCredentials);

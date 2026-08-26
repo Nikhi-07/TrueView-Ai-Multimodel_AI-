@@ -1,0 +1,651 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { 
+  Shield, Video, Users, Copy, Share2, PhoneOff, AlertTriangle, AlertCircle, 
+  CheckCircle2, RefreshCw, Eye, Play, FileText, Smartphone, Mic, Clock, 
+  ExternalLink, Volume2, UserCheck, Activity, Bell, Check, X
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { io } from 'socket.io-client';
+import { useAuth } from '../context/AuthContext';
+import api from '../services/api';
+import ParticipantDetailModal from '../components/Modals/ParticipantDetailModal';
+import SessionDetailModal from '../components/Modals/SessionDetailModal';
+import ReportDetailModal from '../components/Modals/ReportDetailModal';
+
+export default function ProctorRoomHost() {
+  const { id: roomId } = useParams();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+
+  const [room, setRoom] = useState(null);
+  const [participants, setParticipants] = useState([]);
+  const [liveAlerts, setLiveAlerts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [toastMsg, setToastMsg] = useState(null);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [highlightedCandidateId, setHighlightedCandidateId] = useState(null);
+  const [showEndModal, setShowEndModal] = useState(false);
+
+  // Modals state
+  const [selectedParticipant, setSelectedParticipant] = useState(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState(null);
+  const [isSessionModalOpen, setIsSessionModalOpen] = useState(false);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+
+  const socketRef = useRef(null);
+
+  useEffect(() => {
+    fetchRoomDetails();
+    initSocketConnection();
+
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
+  }, [roomId]);
+
+  const showNotification = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 3500);
+  };
+
+  const fetchRoomDetails = async () => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/rooms/${roomId}`);
+      if (res.data.success && res.data.room) {
+        setRoom(res.data.room);
+        if (Array.isArray(res.data.room.participants)) {
+          setParticipants(res.data.room.participants);
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch room details:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const initSocketConnection = () => {
+    const token = localStorage.getItem('trueview_token');
+    const socket = io({
+      path: '/socket.io',
+      transports: ['polling', 'websocket'],
+      auth: { token: token || undefined },
+    });
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      console.log(`[ProctorHost] Connected to Socket.IO. Joining proctor:${roomId}`);
+      socket.emit('join_room', {
+        roomId,
+        sessionId: roomId,
+        role: 'reviewer',
+        user: user ? { id: String(user._id || user.id), name: user.fullName || user.name, role: user.role } : null,
+      });
+    });
+
+    // Real-time proctor alert listener
+    socket.on('proctor_alert', (alert) => {
+      console.log('[ProctorHost] Received live proctor_alert:', alert);
+      const newAlert = {
+        id: `alert_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        candidateName: alert.candidateName || 'Candidate',
+        candidateId: alert.candidateId,
+        type: alert.type || alert.eventType || 'AI_ALERT',
+        severity: alert.severity || 'MEDIUM',
+        riskScore: alert.riskScore || 0,
+        message: alert.message || alert.evidence || alert.type,
+        timestamp: alert.timestamp ? new Date(alert.timestamp) : new Date(),
+      };
+
+      setLiveAlerts((prev) => [newAlert, ...prev].slice(0, 100));
+
+      // Highlight participant card
+      if (alert.candidateId) {
+        setHighlightedCandidateId(alert.candidateId);
+        setTimeout(() => setHighlightedCandidateId(null), 4000);
+      }
+
+      // Update participant risk and violations
+      setParticipants((prev) =>
+        prev.map((p) => {
+          if (p.id === alert.candidateId || p.sessionId === alert.sessionId) {
+            return {
+              ...p,
+              riskScore: alert.riskScore !== undefined ? alert.riskScore : p.riskScore,
+              riskLevel: alert.severity === 'CRITICAL' || alert.severity === 'HIGH' ? 'HIGH' : p.riskLevel,
+              violations: (p.violations || 0) + 1,
+              phoneDetected: alert.type === 'PHONE_DETECTED' ? true : p.phoneDetected,
+            };
+          }
+          return p;
+        })
+      );
+
+      // Toast notification for High/Critical
+      if (alert.severity === 'CRITICAL' || alert.severity === 'HIGH') {
+        showNotification(`[HIGH ALERT] ${alert.candidateName || 'Candidate'}: ${alert.type?.replace(/_/g, ' ')}`);
+      }
+    });
+
+    // Participant joined
+    socket.on('participant_joined', (data) => {
+      if (data.candidate) {
+        showNotification(`${data.candidate.name || 'Candidate'} joined the proctoring room.`);
+        setParticipants((prev) => {
+          const exists = prev.some((p) => p.id === data.candidate.id || p.sessionId === data.sessionId);
+          if (exists) {
+            return prev.map((p) => (p.id === data.candidate.id ? { ...p, ...data.candidate, status: 'MONITORING' } : p));
+          }
+          return [...prev, { ...data.candidate, status: 'MONITORING' }];
+        });
+      }
+      if (data.participants) {
+        setParticipants(data.participants);
+      }
+    });
+
+    // Participant left
+    socket.on('participant_left', (data) => {
+      if (data.candidateId) {
+        setParticipants((prev) =>
+          prev.map((p) => (p.id === data.candidateId ? { ...p, status: 'LEFT' } : p))
+        );
+      }
+    });
+
+    // Risk updated
+    socket.on('participant_risk_updated', (data) => {
+      setParticipants((prev) =>
+        prev.map((p) => {
+          if (p.id === data.candidateId || p.sessionId === data.sessionId) {
+            return {
+              ...p,
+              riskScore: data.riskScore !== undefined ? data.riskScore : p.riskScore,
+              riskLevel: data.riskLevel || p.riskLevel,
+              violations: data.violations !== undefined ? data.violations : p.violations,
+              liveness: data.liveness || p.liveness,
+              faceDetected: data.faceDetected !== undefined ? data.faceDetected : p.faceDetected,
+              phoneDetected: data.phoneDetected !== undefined ? data.phoneDetected : p.phoneDetected,
+            };
+          }
+          return p;
+        })
+      );
+    });
+
+    // Room participants list updated
+    socket.on('room_participants_updated', (data) => {
+      if (Array.isArray(data.participants)) {
+        setParticipants(data.participants);
+      }
+    });
+  };
+
+  const getJoinUrl = () => {
+    const origin = window.location.origin;
+    const token = room?.joinCode || '';
+    return `${origin}/join/${roomId}${token ? `?token=${token}` : ''}`;
+  };
+
+  const handleCopyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(getJoinUrl());
+      setCopiedLink(true);
+      showNotification('Join link copied successfully.');
+      setTimeout(() => setCopiedLink(false), 2500);
+    } catch (_) {
+      showNotification('Failed to copy link.');
+    }
+  };
+
+  const handleShareLink = async () => {
+    const joinUrl = getJoinUrl();
+    const title = room?.title || 'TrueView AI Proctoring Room';
+    const text = `Join TrueView AI Proctoring Session:\n"${title}"\nRoom ID: ${roomId}\nJoin Link: ${joinUrl}`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, text, url: joinUrl });
+      } catch (err) {
+        if (err.name !== 'AbortError') handleCopyLink();
+      }
+    } else {
+      handleCopyLink();
+    }
+  };
+
+  const handleEndRoom = async () => {
+    try {
+      const res = await api.post(`/rooms/${roomId}/end`);
+      if (res.data.success) {
+        setRoom((prev) => ({ ...prev, status: 'ENDED' }));
+        setShowEndModal(false);
+        showNotification(`Room ${roomId} has been ended.`);
+        fetchRoomDetails();
+      }
+    } catch (err) {
+      showNotification(err.response?.data?.message || 'Failed to end room.');
+    }
+  };
+
+  const openParticipantDetail = (participant) => {
+    setSelectedParticipant(participant);
+    setIsDetailModalOpen(true);
+  };
+
+  const openSessionDetail = (sessId) => {
+    setSelectedSessionId(sessId);
+    setIsSessionModalOpen(true);
+  };
+
+  const openReport = (sessId) => {
+    setSelectedSessionId(sessId);
+    setIsReportModalOpen(true);
+  };
+
+  const activeCandidates = participants.filter((p) => p.status !== 'LEFT');
+  const isEnded = room?.status === 'ENDED';
+
+  return (
+    <div className="min-h-screen bg-[#121316] text-white flex flex-col font-sans select-none">
+      {/* Toast Notification */}
+      {toastMsg && (
+        <div className="fixed top-18 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl border border-slate-700 text-xs font-semibold shadow-2xl flex items-center gap-3 animate-fade-in">
+          <Shield size={16} className="text-emerald-400" />
+          <span>{toastMsg}</span>
+        </div>
+      )}
+
+      {/* Top Navigation Bar */}
+      <header className="h-16 bg-[#1a1c22] border-b border-[#2a2d36] px-6 flex items-center justify-between shrink-0 z-30">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+            <Shield size={16} />
+            <span className="font-mono font-extrabold text-xs tracking-wider">TRUEVIEW AI</span>
+          </div>
+
+          <div className="h-4 w-px bg-zinc-700" />
+
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-sm font-bold text-white truncate max-w-md">
+                {room?.title || `Proctor Room ${roomId}`}
+              </h1>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                {room?.mode || 'EXAM'}
+              </span>
+              <span className="text-xs font-mono text-zinc-400">
+                (ID: {roomId})
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Action Controls */}
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={handleCopyLink}
+            className="py-1.5 px-3 rounded-lg bg-[#2b2e38] hover:bg-[#353945] text-zinc-200 border border-[#3f4350] text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+            title="Copy Public Candidate Join Link"
+          >
+            {copiedLink ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+            <span>{copiedLink ? 'Copied Link' : 'Copy Invite Link'}</span>
+          </button>
+
+          <button
+            onClick={handleShareLink}
+            className="py-1.5 px-3 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+            title="Share to WhatsApp / Candidate"
+          >
+            <Share2 size={13} />
+            <span>Share</span>
+          </button>
+
+          <button
+            onClick={() => navigate('/rooms')}
+            className="py-1.5 px-3 rounded-lg bg-[#2b2e38] hover:bg-[#353945] text-zinc-400 hover:text-white text-xs font-semibold transition cursor-pointer"
+          >
+            Exit to Rooms
+          </button>
+
+          {!isEnded ? (
+            <button
+              onClick={() => setShowEndModal(true)}
+              className="py-1.5 px-3.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1.5 transition shadow-md cursor-pointer"
+            >
+              <PhoneOff size={13} />
+              <span>End Room</span>
+            </button>
+          ) : (
+            <span className="px-3 py-1 bg-zinc-800 text-zinc-400 text-xs font-bold rounded-lg border border-zinc-700">
+              ROOM CONCLUDED
+            </span>
+          )}
+        </div>
+      </header>
+
+      {/* Main Content Layout: Participants Grid (Left) + Live AI Alerts Panel (Right) */}
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0">
+        
+        {/* Left Area: Participants Cards Grid */}
+        <div className="flex-1 p-6 overflow-y-auto custom-scrollbar space-y-6">
+          
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <Users size={18} className="text-emerald-400" />
+              <h2 className="text-sm font-bold uppercase tracking-wider text-zinc-200">
+                Monitored Participants ({activeCandidates.length} Active / {room?.maxParticipants || 30} Max)
+              </h2>
+            </div>
+            <button
+              onClick={fetchRoomDetails}
+              className="p-1.5 rounded-lg hover:bg-[#2a2d36] text-zinc-400 hover:text-white transition cursor-pointer"
+              title="Refresh Participants"
+            >
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            </button>
+          </div>
+
+          {loading ? (
+            <div className="py-24 text-center text-zinc-500 font-mono text-xs">
+              <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+              SYNCHRONIZING PARTICIPANTS...
+            </div>
+          ) : participants.length === 0 ? (
+            <div className="py-20 text-center bg-[#1a1c22] border border-[#2a2d36] rounded-2xl p-8 space-y-4">
+              <div className="w-14 h-14 rounded-full bg-[#242730] text-zinc-500 flex items-center justify-center mx-auto">
+                <Users size={28} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">No Candidates Connected Yet</h3>
+                <p className="text-xs text-zinc-400 max-w-sm mx-auto mt-1">
+                  Share the candidate invite link so students or interviewees can join this monitored room.
+                </p>
+              </div>
+              <button
+                onClick={handleCopyLink}
+                className="py-2 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl transition inline-flex items-center gap-2 cursor-pointer"
+              >
+                <Copy size={14} />
+                Copy Candidate Invite Link
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {participants.map((candidate, idx) => {
+                const isHighRisk = candidate.riskScore > 60 || candidate.riskLevel === 'HIGH';
+                const isMediumRisk = candidate.riskScore > 20 && !isHighRisk;
+                const isTargetHighlighted = highlightedCandidateId === candidate.id;
+
+                return (
+                  <motion.div
+                    key={candidate.id || candidate.sessionId || idx}
+                    layout
+                    className={`bg-[#1a1c22] rounded-2xl p-5 border flex flex-col justify-between transition-all duration-300 relative overflow-hidden ${
+                      isTargetHighlighted
+                        ? 'border-rose-500 shadow-[0_0_20px_rgba(244,63,94,0.35)] ring-2 ring-rose-500'
+                        : isHighRisk
+                        ? 'border-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.15)]'
+                        : 'border-[#2a2d36] hover:border-[#3f4350]'
+                    }`}
+                  >
+                    {/* Top Status Indicators */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-xl bg-[#242730] border border-[#353945] text-zinc-200 flex items-center justify-center font-bold text-sm">
+                            {candidate.name?.charAt(0) || 'C'}
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-bold text-white truncate max-w-[140px]">
+                              {candidate.name || 'Candidate'}
+                            </h3>
+                            <span className="text-[10px] text-zinc-400 block font-mono">
+                              {candidate.email || 'Registered Candidate'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                          candidate.status === 'MONITORING'
+                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                            : candidate.status === 'SUSPENDED'
+                            ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                            : candidate.status === 'COMPLETED'
+                            ? 'bg-blue-500/10 text-blue-400 border-blue-500/30'
+                            : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                        }`}>
+                          {candidate.status || 'MONITORING'}
+                        </span>
+                      </div>
+
+                      {/* Candidate AI Diagnostics Badges */}
+                      <div className="grid grid-cols-4 gap-1.5 pt-2 border-t border-[#2a2d36]/60 text-[10px]">
+                        <div className="p-1.5 rounded-lg bg-[#141518] border border-[#242730] text-center">
+                          <span className="text-[8px] text-zinc-500 uppercase block font-mono">Liveness</span>
+                          <span className={`font-bold ${candidate.liveness === 'SPOOF' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                            {candidate.liveness || 'LIVE'}
+                          </span>
+                        </div>
+
+                        <div className="p-1.5 rounded-lg bg-[#141518] border border-[#242730] text-center">
+                          <span className="text-[8px] text-zinc-500 uppercase block font-mono">Identity</span>
+                          <span className={`font-bold ${
+                            candidate.identityStatus === 'MISMATCH'
+                              ? 'text-rose-400 font-black'
+                              : candidate.identityStatus === 'UNKNOWN'
+                              ? 'text-amber-400'
+                              : candidate.identityStatus === 'FACE_NOT_DETECTED'
+                              ? 'text-zinc-400'
+                              : 'text-emerald-400'
+                          }`}>
+                            {candidate.identityStatus === 'MISMATCH'
+                              ? 'MISMATCH'
+                              : candidate.identityStatus === 'UNKNOWN'
+                              ? 'UNKNOWN'
+                              : candidate.identityStatus === 'FACE_NOT_DETECTED'
+                              ? 'NO FACE'
+                              : 'VERIFIED'}
+                          </span>
+                        </div>
+
+                        <div className="p-1.5 rounded-lg bg-[#141518] border border-[#242730] text-center">
+                          <span className="text-[8px] text-zinc-500 uppercase block font-mono">Face</span>
+                          <span className={`font-bold ${candidate.faceDetected !== false ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {candidate.faceDetected !== false ? 'DETECTED' : 'ABSENT'}
+                          </span>
+                        </div>
+
+                        <div className="p-1.5 rounded-lg bg-[#141518] border border-[#242730] text-center">
+                          <span className="text-[8px] text-zinc-500 uppercase block font-mono">Phone</span>
+                          <span className={`font-bold ${candidate.phoneDetected ? 'text-rose-400' : 'text-emerald-400'}`}>
+                            {candidate.phoneDetected ? 'DETECTED' : 'CLEAR'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Risk Score and Violations Metric */}
+                      <div className="flex items-center justify-between p-2.5 rounded-xl bg-[#141518] border border-[#242730]">
+                        <div>
+                          <span className="text-[10px] text-zinc-400 block font-medium">Risk Score</span>
+                          <span className={`text-base font-black ${isHighRisk ? 'text-rose-400' : isMediumRisk ? 'text-amber-400' : 'text-emerald-400'}`}>
+                            {candidate.riskScore || 0}%
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] text-zinc-400 block font-medium">Violations</span>
+                          <span className="text-base font-black text-white">
+                            {candidate.violations || 0}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* View Button */}
+                    <div className="pt-3 border-t border-[#2a2d36] mt-4">
+                      <button
+                        onClick={() => openParticipantDetail(candidate)}
+                        className="w-full py-2 px-3 rounded-xl bg-[#242730] hover:bg-[#2e323e] border border-[#353945] text-xs font-bold text-white flex items-center justify-center gap-1.5 transition cursor-pointer"
+                      >
+                        <Eye size={13} className="text-emerald-400" />
+                        <span>View Telemetry & Details</span>
+                      </button>
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Right Area: Real-Time Live AI Alerts Panel */}
+        <div className="w-full lg:w-96 bg-[#17181c] border-t lg:border-t-0 lg:border-l border-[#2a2d36] flex flex-col shrink-0">
+          
+          <div className="p-4 border-b border-[#2a2d36] flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+                Live AI Violation Stream
+              </h3>
+            </div>
+            <span className="text-[10px] font-mono font-bold text-zinc-400 bg-[#242730] px-2 py-0.5 rounded">
+              {liveAlerts.length} Events
+            </span>
+          </div>
+
+          <div className="flex-1 p-4 overflow-y-auto custom-scrollbar space-y-2.5">
+            {liveAlerts.length === 0 ? (
+              <div className="py-24 text-center text-zinc-500 text-xs">
+                <Shield size={24} className="mx-auto mb-2 text-zinc-600" />
+                <span>Listening for real-time candidate AI events...</span>
+              </div>
+            ) : (
+              liveAlerts.map((alert) => {
+                const isCritical = alert.severity === 'CRITICAL' || alert.severity === 'HIGH';
+                const isMedium = alert.severity === 'MEDIUM';
+
+                return (
+                  <motion.div
+                    key={alert.id}
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className={`p-3 rounded-xl border text-xs space-y-1.5 ${
+                      isCritical
+                        ? 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+                        : isMedium
+                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+                        : 'bg-blue-500/10 border-blue-500/30 text-blue-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase font-mono ${
+                          isCritical ? 'bg-rose-600 text-white' : isMedium ? 'bg-amber-600 text-white' : 'bg-blue-600 text-white'
+                        }`}>
+                          {alert.severity}
+                        </span>
+                        <span className="font-bold text-white truncate max-w-[120px]">
+                          {alert.candidateName}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-zinc-400 font-mono">
+                        {alert.timestamp ? new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''}
+                      </span>
+                    </div>
+
+                    <div className="font-semibold text-white text-[11px]">
+                      {alert.type?.replace(/_/g, ' ')}
+                    </div>
+
+                    <div className="text-[10px] text-zinc-300 leading-snug line-clamp-2">
+                      {alert.message}
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1 border-t border-white/5 text-[10px] text-zinc-400">
+                      <span>Risk Impact:</span>
+                      <span className="font-bold text-white">{alert.riskScore}%</span>
+                    </div>
+                  </motion.div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* END ROOM CONFIRMATION MODAL */}
+      <AnimatePresence>
+        {showEndModal && (
+          <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 text-center space-y-5 shadow-2xl"
+            >
+              <div className="w-14 h-14 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center mx-auto">
+                <PhoneOff size={28} />
+              </div>
+
+              <div>
+                <h3 className="text-lg font-bold text-white mb-1">
+                  End Proctoring Room?
+                </h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  This will conclude the proctoring session for all {activeCandidates.length} connected candidates. Active monitoring recordings and final integrity reports will be safely saved.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  onClick={() => setShowEndModal(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleEndRoom}
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition cursor-pointer shadow-lg"
+                >
+                  Confirm & End Room
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* PARTICIPANT DETAIL MODAL */}
+      <ParticipantDetailModal
+        isOpen={isDetailModalOpen}
+        onClose={() => setIsDetailModalOpen(false)}
+        participant={selectedParticipant}
+        roomId={roomId}
+        roomTitle={room?.title}
+        mode={room?.mode || 'EXAM'}
+        onOpenSession={openSessionDetail}
+        onOpenReport={openReport}
+      />
+
+      {/* SESSION DETAIL & RECORDING PLAYBACK MODAL */}
+      <SessionDetailModal
+        isOpen={isSessionModalOpen}
+        onClose={() => setIsSessionModalOpen(false)}
+        sessionId={selectedSessionId}
+        onOpenReport={openReport}
+      />
+
+      {/* REPORT DETAIL MODAL */}
+      <ReportDetailModal
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+        sessionId={selectedSessionId}
+      />
+    </div>
+  );
+}

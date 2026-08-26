@@ -79,6 +79,24 @@ const protectPending = async (req, res, next) => {
   }
 };
 
+// Optional protect - Populates req.user if token is present, but allows unauthenticated candidate requests to proceed
+const optionalProtect = async (req, res, next) => {
+  let token;
+  if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith('Bearer')
+  ) {
+    try {
+      token = req.headers.authorization.split(' ')[1];
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      if (decoded.id && !decoded.pendingFace && !decoded.pendingVoice) {
+        req.user = await User.findById(decoded.id).select('-password');
+      }
+    } catch (_) {}
+  }
+  next();
+};
+
 // Admin middleware
 const admin = (req, res, next) => {
   if (req.user && req.user.role === 'admin') {
@@ -88,4 +106,5 @@ const admin = (req, res, next) => {
   }
 };
 
-module.exports = { protect, protectPending, admin };
+module.exports = { protect, protectPending, optionalProtect, admin };
+

@@ -8,7 +8,13 @@ const Alert = require('../models/Alert');
 const getReports = async (req, res, next) => {
   try {
     // Authorization: admins see all reports; other users see only their own.
-    const query = req.user && req.user.role !== 'admin' ? { userEmail: req.user.email } : {};
+    let query = {};
+    if (req.user && req.user.role !== 'admin') {
+      query.$or = [
+        { userEmail: req.user.email },
+        { userEmail: req.user.email.toLowerCase() },
+      ];
+    }
     const reports = await Report.find(query).sort({ createdAt: -1 });
     res.json({ success: true, count: reports.length, reports });
   } catch (error) {
@@ -86,29 +92,59 @@ const generateReport = async (req, res, next) => {
         confidence: a.confidence,
       }));
 
-    const report = await Report.create({
-      reportId,
-      sessionId,
-      userName: session?.userName || 'Student Candidate',
-      userEmail: session?.userEmail || 'student@trueview.ai',
-      sessionType: session?.mode || 'EXAM',
-      startTime: session?.startTime || null,
-      endTime: session?.endTime || null,
-      durationSeconds: session?.endTime ? Math.max(0, Math.round((new Date(session.endTime) - new Date(session.startTime)) / 1000)) : 0,
-      overallIntegrityScore: score,
-      riskLevel,
-      totalViolations,
-      phoneDetections,
-      alerts: alerts.map(a => ({
+    const identityMismatchCount = session?.identityMismatchCount || alerts.filter(a => a.type === 'IDENTITY_MISMATCH').length;
+    const identityStatus = session?.identityStatus || (identityMismatchCount > 0 ? 'MISMATCH' : 'VERIFIED');
+
+    let report = await Report.findOne({ sessionId });
+    if (!report) {
+      report = await Report.create({
+        reportId,
+        sessionId,
+        userName: session?.userName || 'Student Candidate',
+        userEmail: session?.userEmail || 'student@trueview.ai',
+        sessionType: session?.mode || 'EXAM',
+        startTime: session?.startTime || null,
+        endTime: session?.endTime || null,
+        durationSeconds: session?.endTime ? Math.max(0, Math.round((new Date(session.endTime) - new Date(session.startTime)) / 1000)) : 0,
+        overallIntegrityScore: score,
+        riskLevel,
+        totalViolations,
+        phoneDetections,
+        identityMismatchCount,
+        identityStatus,
+        faceVerified: identityStatus === 'VERIFIED',
+        livenessPassed: true,
+        alerts: alerts.map(a => ({
+          type: a.type,
+          eventType: a.eventType || a.type,
+          severity: a.severity,
+          evidence: a.evidence,
+          timestamp: a.timestamp,
+        })),
+        timeline,
+        status,
+      });
+    } else {
+      report.endTime = session?.endTime || new Date();
+      report.durationSeconds = session?.endTime ? Math.max(0, Math.round((new Date(session.endTime) - new Date(session.startTime)) / 1000)) : report.durationSeconds;
+      report.overallIntegrityScore = score;
+      report.riskLevel = riskLevel;
+      report.totalViolations = totalViolations;
+      report.phoneDetections = phoneDetections;
+      report.identityMismatchCount = identityMismatchCount;
+      report.identityStatus = identityStatus;
+      report.faceVerified = identityStatus === 'VERIFIED';
+      report.alerts = alerts.map(a => ({
         type: a.type,
         eventType: a.eventType || a.type,
         severity: a.severity,
         evidence: a.evidence,
         timestamp: a.timestamp,
-      })),
-      timeline,
-      status,
-    });
+      }));
+      report.timeline = timeline;
+      report.status = status;
+      await report.save();
+    }
 
     res.json({ success: true, report });
   } catch (error) {

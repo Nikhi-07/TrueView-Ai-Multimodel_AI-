@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   X, Video, Play, Shield, AlertTriangle, Clock, Calendar, CheckCircle2, 
-  FileText, Download, User, Smartphone, Eye, Mic, Activity
+  FileText, Download, User, Smartphone, Eye, Mic, Activity, Compass, Scan, Brain, Box
 } from 'lucide-react';
 import api from '../../services/api';
 
@@ -43,6 +43,14 @@ export default function SessionDetailModal({ isOpen, onClose, sessionId, onOpenR
   const durationStr = `${durationMin}m ${durationSecRem.toString().padStart(2, '0')}s`;
   const riskScore = Math.round(session?.peakRiskScore || 0);
   const integrityScore = session?.overallIntegrityScore ?? Math.max(0, 100 - riskScore);
+  const riskLevel = riskScore > 60 ? 'HIGH' : riskScore > 20 ? 'MEDIUM' : 'NORMAL';
+
+  // Subsystem stats from alerts
+  const phoneAlerts = alerts.filter(a => a.type === 'PHONE_DETECTED' || a.eventType === 'PHONE_DETECTED').length;
+  const livenessAlerts = alerts.filter(a => a.type?.includes('SPOOF') || a.type?.includes('LIVENESS')).length;
+  const gazeAlerts = alerts.filter(a => a.type?.includes('GAZE') || a.type?.includes('LOOKING_AWAY')).length;
+  const voiceAlerts = alerts.filter(a => a.type?.includes('SPEECH') || a.type?.includes('VOICE') || a.type?.includes('SPEAKER')).length;
+  const multiPersonAlerts = alerts.filter(a => a.type?.includes('MULTIPLE_PERSONS') || a.type?.includes('MULTIPLE_FACES')).length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in overflow-y-auto">
@@ -55,7 +63,7 @@ export default function SessionDetailModal({ isOpen, onClose, sessionId, onOpenR
               <Shield size={20} />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-base font-bold text-white">Session Detail & Video Playback</h3>
                 <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
                   {sessionId}
@@ -64,7 +72,10 @@ export default function SessionDetailModal({ isOpen, onClose, sessionId, onOpenR
                   {session?.mode || session?.sessionType || 'EXAM'}
                 </span>
               </div>
-              <p className="text-xs text-slate-400">Candidate: <span className="text-slate-200 font-semibold">{session?.userName || session?.userEmail || 'Candidate'}</span></p>
+              <p className="text-xs text-slate-400">
+                {session?.roomTitle ? `${session.roomTitle} — ` : ''}
+                Candidate: <span className="text-slate-200 font-semibold">{session?.userName || session?.userEmail || 'Candidate'}</span>
+              </p>
             </div>
           </div>
           <button
@@ -86,7 +97,7 @@ export default function SessionDetailModal({ isOpen, onClose, sessionId, onOpenR
             Session data not found.
           </div>
         ) : (
-          <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
+          <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto custom-scrollbar">
             
             {/* Top Metric Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -113,7 +124,7 @@ export default function SessionDetailModal({ isOpen, onClose, sessionId, onOpenR
                 <div className="flex items-center gap-1.5 font-bold text-sm">
                   <AlertTriangle size={14} className={riskScore > 60 ? "text-rose-400" : "text-slate-400"} />
                   <span className={riskScore > 60 ? "text-rose-400" : riskScore > 20 ? "text-amber-400" : "text-emerald-400"}>
-                    {riskScore}/100
+                    {riskScore}/100 ({riskLevel})
                   </span>
                 </div>
               </div>
@@ -123,6 +134,90 @@ export default function SessionDetailModal({ isOpen, onClose, sessionId, onOpenR
                 <div className="flex items-center gap-1.5 text-slate-100 font-bold text-sm">
                   <Activity size={14} className="text-purple-400" />
                   <span>{alerts.length} events</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Session Overview Details */}
+            <div className="bg-slate-800/30 border border-slate-700/50 rounded-xl p-4 space-y-3">
+              <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                <Info size={14} className="text-blue-400" />
+                Session Overview
+              </h4>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div>
+                  <span className="text-slate-500 block text-[10px]">Candidate</span>
+                  <span className="text-slate-200 font-semibold">{session.userName}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[10px]">Mode</span>
+                  <span className="text-slate-200 font-semibold">{session.mode}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[10px]">Start Time</span>
+                  <span className="text-slate-200 font-mono">{startTime.toLocaleTimeString()}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[10px]">Status</span>
+                  <span className="text-emerald-400 font-semibold">{session.status}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* AI Summary Subsystems */}
+            <div className="bg-slate-800/30 border border-slate-700/50 rounded-xl p-4 space-y-3">
+              <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                <Brain size={14} className="text-emerald-400" />
+                Multimodal AI Subsystems Summary
+              </h4>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
+                <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <Scan size={13} className="text-blue-400" /> ConvNeXt Liveness
+                  </span>
+                  <span className={livenessAlerts > 0 ? "text-rose-400 font-bold" : "text-emerald-400 font-semibold"}>
+                    {livenessAlerts > 0 ? `${livenessAlerts} flags` : 'Passed'}
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <Eye size={13} className="text-emerald-400" /> Gaze & Head Pose
+                  </span>
+                  <span className={gazeAlerts > 0 ? "text-amber-400 font-bold" : "text-emerald-400 font-semibold"}>
+                    {gazeAlerts > 0 ? `${gazeAlerts} deviations` : 'Clean'}
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <Box size={13} className="text-purple-400" /> YOLO Environment
+                  </span>
+                  <span className={phoneAlerts > 0 || multiPersonAlerts > 0 ? "text-rose-400 font-bold" : "text-emerald-400 font-semibold"}>
+                    {phoneAlerts > 0 ? 'Phone detected' : multiPersonAlerts > 0 ? 'Multiple persons' : 'Clean'}
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <Mic size={13} className="text-yellow-400" /> Voice VAD
+                  </span>
+                  <span className={voiceAlerts > 0 && session.mode === 'EXAM' ? "text-amber-400 font-bold" : "text-emerald-400 font-semibold"}>
+                    {voiceAlerts > 0 ? `${voiceAlerts} voice events` : 'Normal'}
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <Activity size={13} className="text-rose-400" /> Behaviour Control
+                  </span>
+                  <span className="text-slate-200 font-semibold">
+                    {alerts.length > 5 ? 'Elevated Activity' : 'Normal'}
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <Brain size={13} className="text-cyan-400" /> Decision Engine
+                  </span>
+                  <span className={riskScore > 60 ? "text-rose-400 font-bold" : "text-emerald-400 font-semibold"}>
+                    {riskScore > 60 ? 'Review Required' : 'Approved'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -163,8 +258,8 @@ export default function SessionDetailModal({ isOpen, onClose, sessionId, onOpenR
               ) : (
                 <div className="bg-slate-900/60 border border-dashed border-slate-700 rounded-lg p-8 text-center space-y-2">
                   <Play size={28} className="mx-auto text-slate-500 opacity-60" />
-                  <p className="text-xs font-semibold text-slate-300">Live Recording Stream Archived</p>
-                  <p className="text-[11px] text-slate-500">Video telemetry stream captured during live candidate monitoring session.</p>
+                  <p className="text-xs font-semibold text-slate-300">Recording unavailable for this session.</p>
+                  <p className="text-[11px] text-slate-500">No video recording stream was archived for this session.</p>
                 </div>
               )}
             </div>
@@ -173,7 +268,7 @@ export default function SessionDetailModal({ isOpen, onClose, sessionId, onOpenR
             <div className="space-y-3">
               <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
                 <Activity size={14} className="text-blue-400" />
-                Chronological AI Event Timeline ({timeline.length} recorded)
+                Chronological Violation & Alert Timeline ({timeline.length} recorded)
               </h4>
 
               {timeline.length === 0 ? (
@@ -182,7 +277,7 @@ export default function SessionDetailModal({ isOpen, onClose, sessionId, onOpenR
                   No security violations or alerts recorded during this session. Behavior clean.
                 </div>
               ) : (
-                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
                   {timeline.map((evt, idx) => {
                     const isCritical = evt.severity === 'CRITICAL' || evt.type?.includes('SPOOF') || evt.type?.includes('PHONE');
                     const isWarning = evt.severity === 'HIGH' || evt.severity === 'MEDIUM';

@@ -63,6 +63,14 @@ class SessionManager:
             sess = SessionInstance(session_id, user_id, session_type, registered_face_embeddings)
             sess.state = SessionState.MONITORING
             self._sessions[session_id] = sess
+        else:
+            sess = self._sessions[session_id]
+            if registered_face_embeddings:
+                sess.registered_face_embeddings = registered_face_embeddings
+            if user_id and user_id != "candidate_01":
+                sess.user_id = user_id
+            if session_type:
+                sess.session_type = session_type
         return self._sessions[session_id]
 
     def set_state(self, session_id: str, state: str):

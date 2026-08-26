@@ -163,6 +163,26 @@ class BehaviourEngine:
                 "state": "CONFIRMED"
             })
 
+        # 7. Identity Mismatch / Candidate Replacement
+        ident_eval = fused_features.get("identity", {})
+        ident_status = ident_eval.get("status")
+        if (
+            ident_status in ("IDENTITY_MISMATCH", "POSSIBLE_USER_REPLACEMENT")
+            and not ident_eval.get("recognition_unavailable")
+            and fused_features.get("face_detected", True)
+        ):
+            events.append({
+                "event_id": f"evt_{uuid.uuid4().hex[:8]}",
+                "session_id": session_id,
+                "timestamp": now_str,
+                "type": "IDENTITY_MISMATCH",
+                "severity": "CRITICAL" if session_type == "EXAM" else "HIGH",
+                "confidence": ident_eval.get("confidence", 0.90),
+                "duration": 1.0,
+                "evidence": "Registered candidate not detected. Visible face does not match registered biometric profile.",
+                "state": "CONFIRMED"
+            })
+
         # State classification
         if any(e["severity"] == "CRITICAL" for e in events):
             current_state = "critical_violation"

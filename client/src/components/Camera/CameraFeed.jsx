@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useImperativeHandle, forwardRef, useCallback } from 'react';
 import { Camera, CameraOff, AlertCircle, RefreshCw } from 'lucide-react';
 
-const CameraFeed = forwardRef(function CameraFeed({ onDetectionUpdate, isActive: isMonitoringActive }, ref) {
+const CameraFeed = forwardRef(function CameraFeed({ onDetectionUpdate, isActive, isMonitoringActive }, ref) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
@@ -16,7 +16,7 @@ const CameraFeed = forwardRef(function CameraFeed({ onDetectionUpdate, isActive:
   // Capture a frame as base64 JPEG
   const captureFrameBase64 = useCallback(() => {
     const video = videoRef.current;
-    if (!video || !isCameraActive || video.videoWidth === 0) return null;
+    if (!video || !isCameraActive || video.videoWidth === 0 || video.videoHeight === 0) return null;
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -25,16 +25,30 @@ const CameraFeed = forwardRef(function CameraFeed({ onDetectionUpdate, isActive:
     return canvas.toDataURL('image/jpeg', 0.7);
   }, [isCameraActive]);
 
-  // Expose captureFrameBase64 and active MediaStream to parent via ref
-  useImperativeHandle(ref, () => ({
-    captureFrameBase64,
-    getStream: () => streamRef.current
-  }), [captureFrameBase64]);
+  // Stop camera and release all hardware tracks cleanly
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => {
+        try {
+          t.stop();
+        } catch (_) {}
+      });
+      streamRef.current = null;
+    }
+    setIsCameraActive(false);
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }, []);
 
   // Start camera
   const startCamera = useCallback(async () => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current.getTracks().forEach(t => {
+        try {
+          t.stop();
+        } catch (_) {}
+      });
       streamRef.current = null;
     }
     setError(null);
@@ -48,6 +62,16 @@ const CameraFeed = forwardRef(function CameraFeed({ onDetectionUpdate, isActive:
         audio: false
       });
       streamRef.current = newStream;
+
+      const vTrack = newStream.getVideoTracks()[0];
+      if (vTrack) {
+        vTrack.onended = () => {
+          console.warn("[CameraFeed] Video track ended.");
+          setIsCameraActive(false);
+          if (onDetectionUpdate) onDetectionUpdate({ trackInterrupted: true, mediaType: 'camera' });
+        };
+      }
+
       setIsCameraActive(true);
       if (videoRef.current) {
         videoRef.current.srcObject = newStream;
@@ -57,19 +81,15 @@ const CameraFeed = forwardRef(function CameraFeed({ onDetectionUpdate, isActive:
       setError(err.message || 'Camera permission denied or camera device unavailable.');
       setIsCameraActive(false);
     }
-  }, []);
+  }, [onDetectionUpdate]);
 
-  // Stop camera
-  const stopCamera = useCallback(() => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-      streamRef.current = null;
-    }
-    setIsCameraActive(false);
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-  }, []);
+  // Expose captureFrameBase64, active MediaStream, startCamera and stopCamera to parent via ref
+  useImperativeHandle(ref, () => ({
+    captureFrameBase64,
+    getStream: () => streamRef.current,
+    startCamera,
+    stopCamera
+  }), [captureFrameBase64, startCamera, stopCamera]);
 
   // Attach stream to video element whenever active
   useEffect(() => {
@@ -78,7 +98,7 @@ const CameraFeed = forwardRef(function CameraFeed({ onDetectionUpdate, isActive:
     }
   }, [isCameraActive]);
 
-  // Auto-start camera preview on mount
+  // Auto-start camera preview on mount and cleanup on unmount
   useEffect(() => {
     startCamera();
     return () => {
@@ -86,12 +106,14 @@ const CameraFeed = forwardRef(function CameraFeed({ onDetectionUpdate, isActive:
     };
   }, [startCamera, stopCamera]);
 
+  const effectiveActive = isActive !== undefined ? isActive : isMonitoringActive;
+
   // Handle monitoring active status changes
   useEffect(() => {
-    if (isMonitoringActive && !isCameraActive) {
+    if (effectiveActive && !isCameraActive) {
       startCamera();
     }
-  }, [isMonitoringActive, isCameraActive, startCamera]);
+  }, [effectiveActive, isCameraActive, startCamera]);
 
   // FPS calculation loop
   useEffect(() => {

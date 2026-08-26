@@ -9,14 +9,14 @@ const {
   uploadSessionRecording,
   endSession
 } = require('../controllers/unifiedController');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, optionalProtect } = require('../middleware/authMiddleware');
 
-router.post('/log', protect, logUnifiedEvent);
+router.post('/log', optionalProtect, logUnifiedEvent);
 router.get('/dashboard-stats', protect, getDashboardStats);
 router.get('/alerts', protect, getAlerts);
 router.get('/sessions', protect, getSessions);
-router.get('/sessions/:sessionId', protect, getSessionById);
+router.get('/sessions/:sessionId', optionalProtect, getSessionById);
 router.post('/sessions/:sessionId/recording', uploadSessionRecording);
-router.post('/sessions/:sessionId/end', protect, endSession);
+router.post('/sessions/:sessionId/end', optionalProtect, endSession);
 
 module.exports = router;

@@ -92,8 +92,8 @@ FRAME_INTERVAL_FACE_MESH        = 1   # Every frame
 FRAME_INTERVAL_GAZE             = 1   # Every frame
 FRAME_INTERVAL_HEAD_POSE        = 1   # Every frame
 FRAME_INTERVAL_OBJECT_DETECTION  = 2   # Every 2nd frame (high-frequency object detection)
-FRAME_INTERVAL_FACE_RECOGNITION = 30  # Periodic identity verification (~every 1s @ 30fps)
-FRAME_INTERVAL_LIVENESS         = 30  # Periodic liveness check (~every 1s)
+FRAME_INTERVAL_FACE_RECOGNITION = 2   # Continuous identity verification (~every 1-2s @ 2-5fps)
+FRAME_INTERVAL_LIVENESS         = 2   # Continuous liveness check (~every 1-2s @ 2-5fps)
 
 # ──────────────────────────────────────────────
 # Detection & Confidence Thresholds

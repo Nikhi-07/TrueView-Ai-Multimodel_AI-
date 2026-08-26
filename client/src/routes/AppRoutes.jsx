@@ -31,7 +31,8 @@ import BehaviourAnalysisViewer from '../pages/BehaviourAnalysisViewer';
 import DecisionEngineViewer from '../pages/DecisionEngineViewer';
 import RoomManager from '../pages/RoomManager';
 import ProctorRoom from '../pages/ProctorRoom';
-
+import ProctorRoomHost from '../pages/ProctorRoomHost';
+import JoinRoom from '../pages/JoinRoom';
 import VoiceRegistration from '../pages/VoiceRegistration';
 
 export default function AppRoutes() {
@@ -40,6 +41,9 @@ export default function AppRoutes() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Public Candidate Onboarding Route */}
+        <Route path="/join/:roomId" element={<JoinRoom />} />
+
         {/* Public Auth Routes */}
         <Route element={<AuthLayout />}>
           {/* Redirect to dashboard if already logged in */}
@@ -51,14 +55,16 @@ export default function AppRoutes() {
           <Route path="/reset-password" element={<ResetPassword />} />
         </Route>
 
-        {/* Protected Standalone Fullscreen Proctor Room Route */}
+        {/* Protected Proctor & Monitoring Routes */}
         <Route element={<ProtectedRoute />}>
           <Route path="/proctor-room/:id" element={<ProctorRoom />} />
+          <Route path="/monitoring" element={<LiveMonitoring />} />
+          <Route path="/proctor-room-host/:id" element={<ProctorRoomHost />} />
+          <Route path="/rooms/:id/host" element={<ProctorRoomHost />} />
 
           <Route element={<DashboardLayout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/rooms" element={<RoomManager />} />
-            <Route path="/monitoring" element={<LiveMonitoring />} />
             <Route path="/sessions" element={<Sessions />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/alerts" element={<Alerts />} />

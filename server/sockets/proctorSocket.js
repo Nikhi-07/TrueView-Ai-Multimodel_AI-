@@ -322,21 +322,34 @@ function initProctorSocket(io) {
     console.log(`[ProctorSocket] Client connected: ${socket.id}`);
 
     // Join Proctor Room
-    socket.on('join_room', ({ sessionId, role, user, sessionType, sessionDuration }) => {
+    socket.on('join_room', ({ sessionId, roomId, role, user, sessionType, sessionDuration }) => {
+      const extractedRoomId = roomId || (sessionId && sessionId.startsWith('TRV-') ? sessionId.split('-').slice(0, 2).join('-') : null);
+      const effectiveRoomId = extractedRoomId || roomId;
       const roomName = `room_${sessionId}`;
       socket.join(roomName);
+      socket.join(`session:${sessionId}`);
       socket.sessionId = sessionId;
+      if (effectiveRoomId) {
+        socket.roomId = effectiveRoomId;
+        socket.join(`proctor:${effectiveRoomId}`);
+        socket.join(`room:proctor:${effectiveRoomId}`);
+        socket.join(`room_${effectiveRoomId}`);
+      }
+
       // Display role from client; AUTHORITATIVE role comes from the JWT (socket.authUser)
-      socket.role = socket.authUser && socket.authUser.role === 'admin' ? 'reviewer' : (role === 'reviewer' ? role : 'participant');
+      socket.role = socket.authUser && socket.authUser.role === 'admin' ? 'reviewer' : (role === 'reviewer' || role === 'host' ? role : 'participant');
       const displayUser = user || (socket.authUser ? { id: socket.authUser.id, name: socket.authUser.name, role: socket.authUser.role } : null);
 
       const sessionState = getOrCreateSessionState(sessionId, sessionType, sessionDuration);
+      if (effectiveRoomId && !sessionState.roomId) {
+        sessionState.roomId = effectiveRoomId;
+      }
 
       if (displayUser && !sessionState.participants.some((p) => p.id === displayUser.id || p.id === socket.id)) {
         sessionState.participants.push({
           socketId: socket.id,
           id: displayUser.id || socket.id,
-          name: displayUser.name || (socket.role === 'reviewer' ? 'Reviewer / Admin' : 'Participant'),
+          name: displayUser.name || (socket.role === 'reviewer' || socket.role === 'host' ? 'Reviewer / Host' : 'Participant'),
           email: displayUser.email || '',
           role: socket.role,
           joinedAt: new Date().toISOString(),
@@ -347,7 +360,9 @@ function initProctorSocket(io) {
           const joinAlert = {
             eventId: makeEventId(),
             sessionId,
+            roomId: effectiveRoomId,
             participantId: displayUser.id || socket.id,
+            candidateName: displayUser.name || 'Participant',
             timestamp: new Date().toISOString(),
             eventType: 'PARTICIPANT_JOINED',
             severity: 'INFO',
@@ -363,14 +378,27 @@ function initProctorSocket(io) {
           sessionState.alertCount += 1;
           persistAlert(joinAlert);
           io.to(roomName).emit('AI_EVENT', joinAlert);
+          io.to(`session:${sessionId}`).emit('AI_EVENT', joinAlert);
+          if (effectiveRoomId) {
+            io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', joinAlert);
+            io.to(`proctor:${effectiveRoomId}`).emit('participant_joined', {
+              roomId: effectiveRoomId,
+              sessionId,
+              candidate: { id: displayUser.id || socket.id, name: displayUser.name || 'Participant', email: displayUser.email || '' },
+              participantsCount: sessionState.participants.length,
+              participants: sessionState.participants,
+            });
+            io.to(`room_${effectiveRoomId}`).emit('room_participants_updated', {
+              participantsCount: sessionState.participants.length,
+              participants: sessionState.participants,
+            });
+          }
         }
       }
 
-      console.log(`[ProctorSocket] ${socket.role} (${socket.id}) joined ${roomName} (mode=${sessionState.sessionType})`);
+      console.log(`[ProctorSocket] ${socket.role} (${socket.id}) joined ${roomName} & proctor:${effectiveRoomId} (mode=${sessionState.sessionType})`);
 
       // Emit current state + server time sync (browser clocks are never trusted).
-      // Internal lifecycle bookkeeping (eventStates, _lastPersist) is stripped
-      // before broadcasting — it is not part of the public session contract.
       const { eventStates, _lastPersist, ...publicSessionState } = sessionState;
       socket.emit('session_state', { ...publicSessionState, serverNow: Date.now() });
       socket.emit('SESSION_TIMER_SYNC', {
@@ -386,6 +414,12 @@ function initProctorSocket(io) {
         participantsCount: sessionState.participants.length,
         participants: sessionState.participants,
       });
+      if (effectiveRoomId) {
+        io.to(`proctor:${effectiveRoomId}`).emit('room_participants_updated', {
+          participantsCount: sessionState.participants.length,
+          participants: sessionState.participants,
+        });
+      }
     });
 
     // Start Session — SERVER-AUTHORITATIVE: only reviewers (authenticated admins)
@@ -596,10 +630,58 @@ function initProctorSocket(io) {
         session.aiEngineOnline = false;
       }
 
+      const effectiveRoomId = session.roomId || (sessionId.startsWith('TRV-') ? sessionId.split('-').slice(0, 2).join('-') : null);
+      const riskScore = Math.max(0, 100 - session.trustScore);
+      const riskLevel = riskScore > 60 ? 'HIGH' : riskScore > 20 ? 'MEDIUM' : 'NORMAL';
+
+      const proctorAlertPayload = {
+        roomId: effectiveRoomId,
+        sessionId,
+        candidateId: (joinedParticipant && joinedParticipant.id) || socket.id,
+        candidateName: (joinedParticipant && joinedParticipant.name) || 'Candidate',
+        type: normalizedType,
+        eventType: normalizedType,
+        severity: newAlert.severity,
+        riskScore,
+        riskLevel,
+        timestamp: newAlert.timestamp,
+        message: newAlert.description || `AI detected ${normalizedType.replace(/_/g, ' ')}`,
+        confidence: newAlert.confidence,
+      };
+
       const roomName = `room_${sessionId}`;
       io.to(roomName).emit('AI_EVENT', newAlert);
+      io.to(`session:${sessionId}`).emit('AI_EVENT', newAlert);
       io.to(roomName).emit('ALERT_CREATED', newAlert);
+      io.to(`session:${sessionId}`).emit('ALERT_CREATED', newAlert);
       io.to(roomName).emit('TRUST_SCORE_UPDATED', { trustScore: session.trustScore });
+      io.to(`session:${sessionId}`).emit('TRUST_SCORE_UPDATED', { trustScore: session.trustScore });
+
+      if (effectiveRoomId) {
+        io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', proctorAlertPayload);
+        io.to(`room:proctor:${effectiveRoomId}`).emit('proctor_alert', proctorAlertPayload);
+        io.to(`room_${effectiveRoomId}`).emit('proctor_alert', proctorAlertPayload);
+        io.to(`proctor:${effectiveRoomId}`).emit('AI_EVENT', newAlert);
+        io.to(`proctor:${effectiveRoomId}`).emit('participant_risk_updated', {
+          roomId: effectiveRoomId,
+          sessionId,
+          candidateId: proctorAlertPayload.candidateId,
+          candidateName: proctorAlertPayload.candidateName,
+          riskScore,
+          riskLevel,
+          violations: session.alertCount,
+        });
+        io.to(`room_${effectiveRoomId}`).emit('participant_risk_updated', {
+          roomId: effectiveRoomId,
+          sessionId,
+          candidateId: proctorAlertPayload.candidateId,
+          candidateName: proctorAlertPayload.candidateName,
+          riskScore,
+          riskLevel,
+          violations: session.alertCount,
+        });
+      }
+
       // Persist asynchronously; never block live alert delivery on a DB write.
       persistAlert(newAlert);
       if (severity === 'CRITICAL' || !session._lastPersist || nowMs - session._lastPersist > 5000) {

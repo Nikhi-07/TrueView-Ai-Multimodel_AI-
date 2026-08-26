@@ -107,6 +107,15 @@ const reportSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    identityStatus: {
+      type: String,
+      enum: ['VERIFIED', 'MISMATCH', 'UNKNOWN', 'FACE_NOT_DETECTED', 'UNAVAILABLE'],
+      default: 'VERIFIED',
+    },
+    identityMismatchCount: {
+      type: Number,
+      default: 0,
+    },
     alerts: [
       {
         // NOTE: field is named `eventType` because a `type` key would be

@@ -375,7 +375,8 @@ const startAISession = async (req, res, next) => {
       return res.status(400).json({ message: 'sessionId is required' });
     }
 
-    const user = await User.findById(req.user.id).select('+faceEmbeddings');
+    const userId = req.user?.id || req.user?._id;
+    const user = await User.findById(userId).select('+faceEmbeddings');
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -390,6 +391,9 @@ const startAISession = async (req, res, next) => {
     // Only include embeddings when a REAL registered face profile exists.
     if (user.faceEmbeddings && Array.isArray(user.faceEmbeddings) && user.faceEmbeddings.length > 0) {
       payload.registered_face_embeddings = user.faceEmbeddings;
+      console.log(`[startAISession] Initializing AI session ${sessionId} for ${user.email} with ${user.faceEmbeddings.length} registered face embedding(s).`);
+    } else {
+      console.warn(`[startAISession] User ${user.email} has no registered face embeddings.`);
     }
 
     const aiRes = await axios.post(`${aiUrl}/api/ai/session/start`, payload);
@@ -782,6 +786,35 @@ const voiceLogin = async (req, res, next) => {
   }
 };
 
+// @desc    Get currently authenticated & registered user info
+// @route   GET /api/auth/me
+// @access  Private
+const getMe = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(401).json({ authenticated: false, registered: false, message: 'User not found' });
+    }
+    const isRegistered = user.status === 'Active' && 
+      user.registrationStatus !== 'PENDING_FACE_REGISTRATION' && 
+      user.registrationStatus !== 'PENDING_VOICE_REGISTRATION';
+    res.json({
+      authenticated: true,
+      registered: isRegistered,
+      user: {
+        id: String(user._id),
+        name: user.fullName,
+        email: user.email,
+        role: user.role,
+        registrationStatus: user.registrationStatus,
+        status: user.status,
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -796,5 +829,7 @@ module.exports = {
   getBiometricStatus,
   faceLogin,
   voiceLogin,
-  verifySessionFace
+  verifySessionFace,
+  getMe
 };
+

@@ -83,58 +83,112 @@ class FaceRecognizer:
             # report unavailability explicitly so callers can fail closed (no identity
             # claim is ever made from synthetic data).
             return {
-                "error": "Face recognition model unavailable. Place face_recognition_sface_2021dec.onnx in face_detection/models/ to enable face verification."
+                "error": "Face recognition model unavailable. Place face_recognition_sface_2021dec.onnx in face_detection/models/ to enable face verification.",
+                "recognition_unavailable": True
+            }
+
+        return self.extract_from_frame(frame)
+
+    def extract_from_frame(self, frame: np.ndarray, face_data=None):
+        """
+        Extracts 128-D SFace embedding directly from an OpenCV BGR frame.
+        If multiple faces are detected, extracts from the primary face (largest area).
+        """
+        if frame is None or frame.size == 0:
+            return {"error": "Invalid frame", "face_detected": False}
+
+        if not self._init_recognizer():
+            return {
+                "error": "Face recognition model unavailable.",
+                "recognition_unavailable": True
             }
 
         try:
-            (h, w) = frame.shape[:2]
-            self.detector.setInputSize((w, h))
-            
-            # Detect faces
-            _, faces_data = self.detector.detect(frame)
-            
-            if faces_data is None or len(faces_data) == 0:
-                return {"error": "No face detected in the image. Please position your face clearly in front of the camera."}
-                
-            if len(faces_data) > 1:
-                return {"error": "Multiple faces detected. Please ensure only one face is visible."}
+            if face_data is not None:
+                primary_face = face_data
+                face_count = 1
+            else:
+                if self.detector is None:
+                    return {"error": "Face detector not available", "face_detected": False}
 
-            # Align the first face
-            face = faces_data[0]
-            aligned_face = self.recognizer.alignCrop(frame, face)
-            
+                (h, w) = frame.shape[:2]
+                self.detector.setInputSize((w, h))
+                _, faces_data = self.detector.detect(frame)
+
+                if faces_data is None or len(faces_data) == 0:
+                    return {"error": "No face detected in the image.", "face_detected": False, "status": "FACE_NOT_DETECTED"}
+
+                face_count = len(faces_data)
+                # Primary candidate face is the largest bounding box area (w * h)
+                primary_face = max(faces_data, key=lambda f: float(f[2]) * float(f[3]))
+
+            # Align and crop face
+            aligned_face = self.recognizer.alignCrop(frame, primary_face)
+
             # Extract features (embedding) and L2-normalize
             raw_emb = self.recognizer.feature(aligned_face)
             norm = np.linalg.norm(raw_emb)
             if norm > 0:
                 raw_emb = raw_emb / norm
-            
+
             embedding_list = raw_emb.flatten().tolist()
-            
+
             return {
                 "embedding": embedding_list,
-                "face_detected": True
+                "face_detected": True,
+                "face_count": face_count
             }
         except Exception as e:
-            print(f"Error extracting embedding via OpenCV SFace: {e}")
-            return {"error": f"Failed to extract face features from image: {str(e)}"}
+            print(f"[FaceRecognizer] Error extracting embedding: {e}")
+            return {"error": f"Failed to extract face features: {str(e)}", "face_detected": False}
 
     def compare_embedding(self, live_embedding, candidate_embeddings: list, threshold=None):
         """
         Compare a live 128-D embedding against candidate embeddings using cosine
         similarity. Verification passes only when the best score is at or above the
-        strict SFace threshold.
+        SFace threshold.
         """
         thresh = threshold if threshold is not None else self.cosine_threshold
+        if live_embedding is None:
+            return {"verified": False, "confidence": 0.0, "status": "MISMATCH", "threshold": thresh}
+
         live_embedding = np.array(live_embedding, dtype=np.float32)
         norm_live = np.linalg.norm(live_embedding)
         if norm_live > 0:
             live_embedding = live_embedding / norm_live
 
+        # Normalize candidates into list of dicts with 128-D embedding arrays
+        normalized_candidates = []
+        if isinstance(candidate_embeddings, list) and len(candidate_embeddings) > 0:
+            if isinstance(candidate_embeddings[0], (int, float)):
+                # Single 1D embedding
+                normalized_candidates.append({"id": "candidate_0", "embedding": candidate_embeddings})
+            else:
+                for idx, cand in enumerate(candidate_embeddings):
+                    if isinstance(cand, dict):
+                        emb = cand.get("embedding", [])
+                        cand_id = cand.get("id", f"candidate_{idx}")
+                    elif isinstance(cand, list):
+                        emb = cand
+                        cand_id = f"candidate_{idx}"
+                    else:
+                        continue
+                    if isinstance(emb, list) and len(emb) > 0:
+                        normalized_candidates.append({"id": cand_id, "embedding": emb})
+
+        if not normalized_candidates:
+            return {
+                "verified": False,
+                "confidence": 0.0,
+                "status": "UNAVAILABLE",
+                "recognition_unavailable": True,
+                "note": "No valid registered face candidates provided."
+            }
+
         best_match = None
         best_score = -1.0
 
-        for candidate in candidate_embeddings:
+        for candidate in normalized_candidates:
             cand_emb = np.array(candidate.get("embedding", []), dtype=np.float32)
             if cand_emb.size == 0:
                 continue
@@ -149,21 +203,21 @@ class FaceRecognizer:
                 best_score = similarity
                 best_match = candidate
 
-        # Verification passes if similarity is above strict threshold
+        # Verification passes if similarity is at or above threshold
         is_matched = best_score >= thresh
         print(f"[SFace Match] Best similarity = {best_score:.4f}, Threshold = {thresh:.2f}, Verified = {is_matched}")
 
         return {
             "verified": is_matched,
-            "confidence": best_score,
+            "confidence": max(0.0, best_score),
             "matched_user_id": best_match.get("id") if (is_matched and best_match) else None,
-            "status": "Verified" if is_matched else ("Unknown User" if best_score > 0 else "No Match")
+            "status": "VERIFIED" if is_matched else "MISMATCH",
+            "threshold": thresh
         }
 
     def verify(self, image_data: str, candidate_embeddings: list):
         """
         Compares live face embedding against a list of candidate embeddings.
-        candidate_embeddings: list of dicts like [{"id": "user1", "embedding": [...]}]
         """
         result = self.extract_embedding(image_data)
         if "error" in result:
