@@ -126,29 +126,59 @@
 
 /* ============================================================
    PRINT / PDF STYLES
-   Ensures single clean report print instance with natural A4 pagination
+   Ensures dedicated, clean single report PDF with natural A4 pagination
    ============================================================ */
+
+/* On normal screen view, the dedicated print root is completely hidden */
+#report-print-root {
+  display: none;
+}
+
 @media print {
   @page {
     size: A4 portrait;
-    margin: 12mm;
+    margin: 12mm 15mm;
   }
 
   html,
   body {
     width: 100% !important;
     height: auto !important;
-    min-height: auto !important;
+    min-height: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
     background: #ffffff !important;
-    color: #000000 !important;
+    color: #0f172a !important;
     overflow: visible !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
 
-  /* Hide application shell, sidebars, navbars, and buttons in print */
+  /* When an active report is being printed, HIDE the entire application (#root) */
+  body.has-active-report-print #root {
+    display: none !important;
+  }
+
+  /* Show ONLY the dedicated report print root */
+  body.has-active-report-print #report-print-root {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+
+  /* Hide print root when no active report is open */
+  body:not(.has-active-report-print) #report-print-root {
+    display: none !important;
+  }
+
+  /* Hide common screen UI elements */
   aside,
   nav,
   header,
@@ -162,46 +192,15 @@
     display: none !important;
   }
 
-  /* Single Printable Report Container */
-  .print-only-report-overlay {
-    position: static !important;
-    inset: auto !important;
-    width: 100% !important;
-    height: auto !important;
-    overflow: visible !important;
-    background: #ffffff !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    display: block !important;
-    z-index: auto !important;
-  }
-
-  .print-only-report-card {
-    position: static !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    height: auto !important;
-    overflow: visible !important;
-    border: none !important;
-    box-shadow: none !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    background: #ffffff !important;
-    color: #000000 !important;
-    transform: none !important;
-  }
-
+  /* Pagination & break helpers */
   .print-avoid-break {
     break-inside: avoid !important;
     page-break-inside: avoid !important;
   }
 
-  /* Ensure background pages / sibling layouts are hidden when modal is open */
-  body:has(.print-only-report-overlay) #root > div > div:not(:has(.print-only-report-overlay)),
-  body:has(.print-only-report-overlay) #root > div > aside,
-  body:has(.print-only-report-overlay) #root > div > div > nav,
-  body:has(.print-only-report-overlay) #root > div > div > main > div:not(:has(.print-only-report-overlay)) {
-    display: none !important;
+  .print-page-break-before {
+    break-before: page !important;
+    page-break-before: always !important;
   }
 }
 

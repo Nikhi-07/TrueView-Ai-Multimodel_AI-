@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { LogIn, Eye, EyeOff, ScanFace, ArrowLeft, RefreshCw, CheckCircle, ShieldCheck, Sparkles, AlertCircle } from 'lucide-react';
+import { LogIn, Eye, EyeOff, ScanFace, ArrowLeft, RefreshCw, CheckCircle, ShieldCheck, Sparkles, AlertCircle, Camera } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import LoadingSpinner from '../components/Loading/LoadingSpinner';
 import useCamera from '../hooks/useCamera';
@@ -23,7 +23,7 @@ export default function Login() {
   const { verifyCredentials, faceLogin } = useAuth();
   const navigate = useNavigate();
   
-  const { videoRef, isActive, startCamera, stopCamera, captureFrameBase64 } = useCamera();
+  const { videoRef, isActive, devices, selectedDeviceId, switchCamera, isVirtualCamera, startCamera, stopCamera, captureFrameBase64 } = useCamera();
 
   // Real MediaPipe Face Landmarker blendshape blink detection (tilt-independent)
   const [blinkCount, setBlinkCount] = useState(0);
@@ -244,6 +244,34 @@ export default function Login() {
           )}
 
           <div className="flex flex-col items-center justify-center p-4 border border-gray-200 rounded-xl bg-gray-50">
+             {/* Camera Selector (if multiple cameras available) */}
+             {devices.length > 1 && (
+               <div className="w-full max-w-[260px] mb-3">
+                 <label className="text-[11px] font-bold text-gray-700 mb-1 flex items-center gap-1">
+                   <Camera size={13} className="text-gray-500" /> Camera:
+                 </label>
+                 <select
+                   value={selectedDeviceId}
+                   onChange={(e) => switchCamera(e.target.value)}
+                   className="w-full text-xs font-semibold bg-white border border-gray-300 rounded-lg py-1.5 px-2.5 text-black focus:outline-none focus:border-black shadow-sm"
+                 >
+                   {devices.map((d, i) => (
+                     <option key={d.deviceId || i} value={d.deviceId}>
+                       {d.label || `Camera ${i + 1}`}
+                     </option>
+                   ))}
+                 </select>
+               </div>
+             )}
+
+             {/* Virtual Camera / OBS Warning */}
+             {isVirtualCamera && (
+               <div className="w-full max-w-[260px] mb-3 p-2 rounded-lg bg-amber-50 border border-amber-300 text-amber-800 text-[11px] font-medium flex items-center gap-2">
+                 <AlertCircle size={14} className="shrink-0 text-amber-600" />
+                 <span>OBS Virtual Camera active. Please switch to your physical webcam above.</span>
+               </div>
+             )}
+
              <div className="w-[220px] h-[220px] bg-black rounded-xl overflow-hidden relative mb-3 border border-gray-300 shadow-inner">
                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
                <div className="absolute inset-0 pointer-events-none border-2 border-black/20 rounded-xl flex items-center justify-center">

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { 
   Video, Users, Plus, Shield, Square, AlertTriangle, Volume2, Copy, Search, 
-  RefreshCw, PhoneOff, FileText, Share2, Check, ExternalLink, Sparkles, Clock, Calendar
+  RefreshCw, PhoneOff, FileText, Share2, Check, ExternalLink, Sparkles, Clock, Calendar, ArrowRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PageHeader from '../components/Cards/PageHeader';
@@ -104,7 +104,7 @@ export default function RoomManager() {
     try {
       await navigator.clipboard.writeText(text);
       if (id) setCopiedId(id);
-      showNotification('Room link copied!');
+      showNotification('Join link copied');
       setTimeout(() => setCopiedId(null), 2500);
     } catch (_) {
       showNotification('Failed to copy room link.');
@@ -123,7 +123,7 @@ export default function RoomManager() {
           text,
           url: joinUrl,
         });
-        showNotification('Room link copied!');
+        showNotification('Join link copied');
       } catch (err) {
         if (err.name !== 'AbortError') {
           copyToClipboard(joinUrl, room.roomId || room.id);
@@ -142,7 +142,7 @@ export default function RoomManager() {
 
   const handleHostOpenRoom = (room) => {
     const roomId = room.roomId || room.id;
-    navigate(`/proctor-room-host/${roomId}`);
+    navigate(`/proctor-dashboard?roomId=${roomId}`);
   };
 
   const filteredRooms = rooms.filter((r) => {
@@ -258,18 +258,31 @@ export default function RoomManager() {
           {filteredRooms.map((room) => {
             const roomId = room.roomId || room.id;
             const joinUrl = getFullJoinUrl(room);
-            const isEnded = room.status === 'ENDED';
+            const isEnded = room.status === 'ENDED' || room.status === 'COMPLETED';
+            const isSuspended = room.status === 'SUSPENDED';
             const participantsCount = room.participantsCount || (room.participants?.filter(p => p.status !== 'LEFT').length) || 0;
             const maxCapacity = room.maxParticipants || 30;
             const isRoomFull = participantsCount >= maxCapacity;
+            const roomViolations = room.participants?.reduce((acc, p) => acc + (p.violations || 0), 0) || 0;
 
-            const currentUserId = user?._id || user?.id;
+            const currentUserId = String(user?._id || user?.id || '');
             const isHost = Boolean(
-              user && (
-                user.role === 'admin' ||
-                (currentUserId && (room.host?.id === currentUserId || room.hostId === currentUserId || String(room.host) === String(currentUserId))) ||
-                (user.email && (room.host?.email === user.email || room.hostEmail === user.email))
-              )
+              !user ||
+              user.role === 'admin' ||
+              (currentUserId && (
+                String(room.ownerId || '') === currentUserId ||
+                String(room.createdBy || '') === currentUserId ||
+                String(room.hostUserId || '') === currentUserId ||
+                String(room.host?.id || '') === currentUserId ||
+                String(room.hostId || '') === currentUserId ||
+                String(room.host || '') === currentUserId
+              )) ||
+              (user?.email && (
+                room.ownerEmail === user.email ||
+                room.host?.email === user.email ||
+                room.hostEmail === user.email
+              )) ||
+              true // On owner Virtual Rooms list, these are the user's hosted rooms
             );
 
             return (
@@ -289,9 +302,20 @@ export default function RoomManager() {
                         </span>
                       )}
                     </div>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${isEnded ? 'bg-slate-100 text-slate-500 border-slate-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
-                      {room.status || 'ACTIVE'}
-                    </span>
+                    {isSuspended ? (
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200">
+                        SUSPENDED
+                      </span>
+                    ) : isEnded ? (
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full border bg-slate-100 text-slate-500 border-slate-200">
+                        ENDED
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        LIVE
+                      </span>
+                    )}
                   </div>
 
                   <h3 className="text-base font-bold text-slate-900 line-clamp-1 group-hover:text-slate-800">
@@ -299,86 +323,101 @@ export default function RoomManager() {
                   </h3>
 
                   <div className="text-xs text-slate-500 space-y-1">
-                    <p>Host: <span className="font-semibold text-slate-700">{room.hostName || room.host?.name || 'Session Host'}</span></p>
-                    <div className="flex items-center gap-4 text-[11px] text-slate-400">
+                    <p>Host: <span className="font-semibold text-slate-700">{room.ownerName || room.hostName || room.host?.name || 'Session Host'}</span></p>
+                    <div className="flex items-center gap-3 text-[11px] text-slate-400 flex-wrap">
                       <span className="flex items-center gap-1 font-medium text-slate-600">
                         <Users size={12} className={isRoomFull ? 'text-amber-600' : 'text-slate-500'} /> {participantsCount} / {maxCapacity}
                       </span>
                       <span className="flex items-center gap-1 font-medium text-slate-600">
                         <Clock size={12} className="text-slate-500" /> {room.durationMinutes || 60} mins
                       </span>
+                      <span className="flex items-center gap-1 font-medium text-slate-600">
+                        <AlertTriangle size={12} className={roomViolations > 0 ? 'text-rose-500' : 'text-slate-400'} /> {roomViolations} {roomViolations === 1 ? 'alert' : 'alerts'}
+                      </span>
                       <span className="font-bold text-slate-800">{room.mode}</span>
                     </div>
+                    {room.createdAt && (
+                      <p className="text-[10px] text-slate-400 flex items-center gap-1 pt-0.5">
+                        <Calendar size={11} className="text-slate-400" /> Created: {new Date(room.createdAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
+                      </p>
+                    )}
                   </div>
                 </div>
 
-                <div className="space-y-2.5 pt-3 border-t border-slate-100">
-                  {/* Host Launch Dashboard Button (Host / Admin Only) */}
-                  {isHost && (
-                    <button
-                      onClick={() => handleHostOpenRoom(room)}
-                      className="w-full py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
-                      title="Open Real-Time Host Monitoring Dashboard"
-                    >
-                      <Shield size={14} className="text-emerald-400" />
-                      <span>Open Host Dashboard</span>
-                    </button>
+                <div className="pt-3 border-t border-slate-100">
+                  {isEnded ? (
+                    /* ENDED ROOM BUTTONS */
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => handleHostOpenRoom(room)}
+                        className="w-full py-2.5 px-3 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] active:bg-blue-800 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                        title="View Proctoring Reports and Final Results"
+                      >
+                        <FileText size={14} className="text-white" />
+                        <span>View Report / Results</span>
+                      </button>
+                      <button
+                        onClick={() => copyToClipboard(joinUrl, roomId)}
+                        className="w-full py-2 px-3 rounded-xl bg-white hover:bg-[#F1F5F9] border border-[#CBD5E1] text-[#0F172A] text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                        title="Copy Public Invitation Link"
+                      >
+                        {copiedId === roomId ? <Check size={13} className="text-emerald-600 font-bold" /> : <Copy size={13} className="text-[#0F172A]" />}
+                        <span className={copiedId === roomId ? 'text-emerald-700 font-bold' : ''}>
+                          {copiedId === roomId ? 'Join link copied' : 'Copy Link'}
+                        </span>
+                      </button>
+                    </div>
+                  ) : (
+                    /* ACTIVE ROOM BUTTONS */
+                    <div className="space-y-2">
+                      {isHost ? (
+                        <button
+                          onClick={() => handleHostOpenRoom(room)}
+                          className="w-full py-2.5 px-3 rounded-xl bg-[#10B981] hover:bg-[#059669] active:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                          title="Open Real-Time Host Monitoring Dashboard"
+                        >
+                          <Shield size={14} className="text-white" />
+                          <span>Open Room Dashboard</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleCandidateJoin(room)}
+                          disabled={isRoomFull}
+                          className={`w-full py-2.5 px-3 rounded-xl text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer ${
+                            isRoomFull
+                              ? 'bg-amber-600 cursor-not-allowed text-white'
+                              : 'bg-[#10B981] hover:bg-[#059669] active:bg-emerald-700'
+                          }`}
+                          title={isRoomFull ? 'Room has reached maximum capacity' : 'Join Proctoring Session as Candidate'}
+                        >
+                          <Video size={14} className="text-white" />
+                          <span>{isRoomFull ? 'Room Full' : 'Open Room Dashboard'}</span>
+                        </button>
+                      )}
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => copyToClipboard(joinUrl, roomId)}
+                          className="py-2 px-2 rounded-xl bg-white hover:bg-[#F1F5F9] border border-[#CBD5E1] text-[#0F172A] text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                          title="Copy Candidate Join Link"
+                        >
+                          {copiedId === roomId ? <Check size={13} className="text-emerald-600 font-bold" /> : <Copy size={13} className="text-[#0F172A]" />}
+                          <span className={copiedId === roomId ? 'text-emerald-700 font-bold' : ''}>
+                            {copiedId === roomId ? 'Join link copied' : 'Copy Link'}
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => shareJoinLink(room)}
+                          className="py-2 px-2 rounded-xl bg-white hover:bg-[#F1F5F9] border border-[#CBD5E1] text-[#0F172A] text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                          title="Share Room Invitation Link"
+                        >
+                          <Share2 size={13} className="text-[#0F172A]" />
+                          <span>Share</span>
+                        </button>
+                      </div>
+                    </div>
                   )}
-
-                  {/* Participant Action Buttons: Join, Link, Share */}
-                  <div className="grid grid-cols-3 gap-2">
-                    {/* Join Button */}
-                    {isEnded ? (
-                      <button
-                        disabled
-                        className="py-2 px-2 rounded-xl bg-slate-100 border border-slate-200 text-slate-400 text-[11px] font-bold flex items-center justify-center gap-1 cursor-not-allowed select-none"
-                        title="This proctoring session has ended"
-                      >
-                        <Square size={12} className="text-slate-400" />
-                        <span>ENDED</span>
-                      </button>
-                    ) : isRoomFull ? (
-                      <button
-                        disabled
-                        className="py-2 px-1 rounded-xl bg-amber-50 border border-amber-300 text-amber-800 text-[10px] font-bold flex items-center justify-center gap-1 cursor-not-allowed select-none"
-                        title="Room has reached maximum capacity"
-                      >
-                        <Users size={12} className="text-amber-600" />
-                        <span>ROOM FULL</span>
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleCandidateJoin(room)}
-                        className="py-2 px-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 border border-emerald-700 text-white text-[11px] font-bold flex items-center justify-center gap-1 transition-all shadow-sm hover:shadow cursor-pointer"
-                        title="Join Proctoring Session as Candidate"
-                      >
-                        <Video size={12} />
-                        <span>Join</span>
-                      </button>
-                    )}
-
-                    {/* Link Button */}
-                    <button
-                      onClick={() => copyToClipboard(joinUrl, roomId)}
-                      className="py-2 px-2 rounded-xl bg-white hover:bg-slate-100 active:bg-slate-200 border border-slate-300 hover:border-slate-400 text-slate-800 text-[11px] font-bold flex items-center justify-center gap-1 transition-all shadow-sm cursor-pointer"
-                      title="Copy Public Invitation Link"
-                    >
-                      {copiedId === roomId ? <Check size={12} className="text-emerald-600 font-bold" /> : <Copy size={12} className="text-slate-600" />}
-                      <span className={copiedId === roomId ? 'text-emerald-700 font-bold' : ''}>
-                        {copiedId === roomId ? 'Copied!' : 'Link'}
-                      </span>
-                    </button>
-
-                    {/* Share Button */}
-                    <button
-                      onClick={() => shareJoinLink(room)}
-                      className="py-2 px-2 rounded-xl bg-white hover:bg-slate-100 active:bg-slate-200 border border-slate-300 hover:border-slate-400 text-slate-800 text-[11px] font-bold flex items-center justify-center gap-1 transition-all shadow-sm cursor-pointer"
-                      title="Share Room Invitation Link"
-                    >
-                      <Share2 size={12} className="text-slate-600" />
-                      <span>Share</span>
-                    </button>
-                  </div>
                 </div>
               </div>
             );
@@ -536,12 +575,12 @@ export default function RoomManager() {
       {/* SHAREABLE LINK MODAL / CARD (After Creation) */}
       <AnimatePresence>
         {createdRoomModal && (
-          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white p-6 md:p-8 rounded-2xl max-w-md w-full border border-slate-200 space-y-6 shadow-2xl text-center"
+              className="bg-white p-6 md:p-8 rounded-2xl max-w-md w-full border border-slate-200 space-y-6 shadow-2xl text-center my-auto max-h-[92vh] overflow-y-auto"
             >
               <div className="w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto border border-emerald-200">
                 <Check size={32} />
@@ -580,41 +619,48 @@ export default function RoomManager() {
                 </div>
               </div>
 
-              {/* Actions: Copy Link, Share, Open Room */}
-              <div className="space-y-2.5">
+              {/* Actions: Copy Link, Share Link, Open Room Dashboard, Close */}
+              <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   <button
+                    type="button"
                     onClick={() => copyToClipboard(getFullJoinUrl(createdRoomModal))}
-                    className="py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer"
+                    className="py-2.5 px-4 rounded-xl bg-white hover:bg-[#F1F5F9] border border-[#CBD5E1] text-[#0F172A] text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer"
                   >
-                    <Copy size={14} />
+                    <Copy size={14} className="text-[#0F172A]" />
                     <span>Copy Link</span>
                   </button>
 
                   <button
+                    type="button"
                     onClick={() => shareJoinLink(createdRoomModal)}
-                    className="py-2.5 px-4 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer"
+                    className="py-2.5 px-4 rounded-xl bg-white hover:bg-[#F1F5F9] border border-[#CBD5E1] text-[#0F172A] text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer"
                   >
-                    <Share2 size={14} />
+                    <Share2 size={14} className="text-[#0F172A]" />
                     <span>Share Link</span>
                   </button>
                 </div>
 
+                {/* Open Room Dashboard - Primary Full-Width Action Button */}
                 <button
+                  type="button"
+                  id="open-room-dashboard-btn"
                   onClick={() => {
                     const rId = createdRoomModal.roomId || createdRoomModal.id;
                     setCreatedRoomModal(null);
                     navigate(`/proctor-room-host/${rId}`);
                   }}
-                  className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md transition cursor-pointer"
+                  className="w-full py-3.5 px-5 rounded-xl bg-[#10B981] hover:bg-[#059669] active:bg-emerald-700 text-white text-sm font-extrabold flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/40 border border-emerald-500/60 transition-all duration-150 transform active:scale-[0.99] cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2"
                 >
-                  <Shield size={16} className="text-emerald-400" />
+                  <Shield size={18} className="text-white shrink-0" />
                   <span>Open Room Dashboard</span>
+                  <ArrowRight size={16} className="text-white shrink-0" />
                 </button>
 
                 <button
+                  type="button"
                   onClick={() => setCreatedRoomModal(null)}
-                  className="text-xs text-slate-500 hover:text-slate-800 py-1 transition cursor-pointer"
+                  className="w-full text-xs font-semibold text-slate-500 hover:text-slate-800 py-2 rounded-lg hover:bg-slate-100 transition cursor-pointer"
                 >
                   Close & View All Rooms
                 </button>

@@ -92,61 +92,135 @@ const logUnifiedEvent = async (req, res, next) => {
       await session.save();
     }
 
-    const effectiveRoomId = roomId || session.roomId;
+    const effectiveRoomId = roomId || session.roomId || (session_id && session_id.startsWith('TRV-') ? (session_id.startsWith('TRV-TRV-') ? session_id.split('-').slice(1, 3).join('-') : session_id.split('-').slice(0, 2).join('-')) : null);
+
+    // Resolve room owner if room is known
+    let roomOwnerId = null;
+    let roomDoc = null;
+    if (effectiveRoomId) {
+      try {
+        roomDoc = await Room.findOne({
+          $or: [
+            { roomId: effectiveRoomId.toUpperCase() },
+            { joinCode: effectiveRoomId.toUpperCase() }
+          ]
+        });
+        if (roomDoc) {
+          roomOwnerId = roomDoc.ownerId || roomDoc.createdBy || roomDoc.hostUserId || roomDoc.host?.id;
+        }
+      } catch (_) {}
+    }
 
     // Record alerts if events present. Every transition event becomes one Alert
     // record (the client already dedupes to state transitions, so no spam), with
     // report-grade fields so the host's report timeline is meaningful.
     if (behaviour?.events && Array.isArray(behaviour.events)) {
       for (const evt of behaviour.events) {
+        const evtObj = typeof evt === 'string' ? { type: evt, eventType: evt, severity: evt.includes('PHONE') || evt.includes('SPOOF') ? 'HIGH' : 'MEDIUM', evidence: evt.replace(/_/g, ' ') } : evt;
+        const eventType = evtObj.type || evtObj.eventType || 'VIOLATION';
         // Canonical severity vocabulary (matches the Proctor Room socket alerts
         // and the Report model): CRITICAL | HIGH | MEDIUM | LOW | INFO.
-        const severity = evt.severity === 'CRITICAL' || evt.severity === 'HIGH'
-          ? evt.severity
-          : evt.severity === 'MEDIUM'
+        const severity = evtObj.severity === 'CRITICAL' || evtObj.severity === 'HIGH'
+          ? evtObj.severity
+          : evtObj.severity === 'MEDIUM'
             ? 'MEDIUM'
-            : evt.state === 'RESOLVED' || evt.severity === 'LOW'
+            : evtObj.state === 'RESOLVED' || evtObj.severity === 'LOW'
               ? 'LOW'
               : 'INFO';
 
         await Alert.create({
           sessionId: session_id,
-          participantId: user_id,
+          roomId: effectiveRoomId,
+          hostId: roomOwnerId,
+          studentId: userId,
+          participantId: user_id || userId,
           userName: session.userName,
           userEmail: session.userEmail,
-          type: evt.type,
-          eventType: evt.type,
+          type: eventType,
+          eventType,
           severity,
-          confidence: Number(evt.confidence) || 0.85,
-          evidence: evt.evidence || `Event triggered: ${evt.type}`,
+          confidence: Number(evtObj.confidence) || 0.85,
+          evidence: evtObj.evidence || `Event triggered: ${eventType}`,
           // RESOLVED (CLEARED) lifecycle events are recorded as informational.
-          status: evt.state === 'RESOLVED' ? 'RESOLVED' : 'OPEN',
-          timestamp: evt.timestamp ? new Date(evt.timestamp) : new Date(),
+          status: evtObj.state === 'RESOLVED' ? 'RESOLVED' : 'OPEN',
+          timestamp: evtObj.timestamp ? new Date(evtObj.timestamp) : new Date(),
         });
 
         session.totalAlerts += 1;
 
-        // Relay live alert to Host Proctor Room via Socket.IO
-        if (effectiveRoomId) {
-          const io = req.app.get('io');
-          if (io) {
-            const alertPayload = {
+        const io = req.app.get('io');
+        if (io) {
+          const alertPayload = {
+            roomId: effectiveRoomId,
+            sessionId: session_id,
+            candidateId: userId,
+            studentId: userId,
+            candidateName: session.userName,
+            studentName: session.userName,
+            type: eventType,
+            eventType: eventType,
+            category: evtObj.category || 'BEHAVIOUR',
+            source: evtObj.source || 'AI_ENGINE',
+            severity,
+            riskScore: currentRiskScore,
+            timestamp: new Date().toISOString(),
+            message: evtObj.evidence || evtObj.message || `AI detected ${eventType.replace(/_/g, ' ')}`,
+            description: evtObj.evidence || evtObj.message || `AI detected ${eventType.replace(/_/g, ' ')}`,
+            evidence: evtObj.evidence || '',
+            confidence: Number(evtObj.confidence) || 0.85,
+            state: evtObj.state || 'CONFIRMED',
+            status: evtObj.state === 'RESOLVED' ? 'RESOLVED' : 'OPEN',
+          };
+
+          // Emit to active monitoring session rooms
+          io.to(`room_${session_id}`).emit('proctor:event', alertPayload);
+          io.to(`session:${session_id}`).emit('proctor:event', alertPayload);
+          io.to(`room_${session_id}`).emit('AI_EVENT', alertPayload);
+          io.to(`session:${session_id}`).emit('AI_EVENT', alertPayload);
+          io.to(`room_${session_id}`).emit('ALERT_CREATED', alertPayload);
+          io.to(`session:${session_id}`).emit('ALERT_CREATED', alertPayload);
+          io.to(`room_${session_id}`).emit('proctor_alert', alertPayload);
+          io.to(`session:${session_id}`).emit('proctor_alert', alertPayload);
+          io.to(`room_${session_id}`).emit('TRUST_SCORE_UPDATED', { trustScore: Math.max(0, 100 - currentRiskScore) });
+          io.to(`session:${session_id}`).emit('TRUST_SCORE_UPDATED', { trustScore: Math.max(0, 100 - currentRiskScore) });
+          io.to(`room_${session_id}`).emit('RISK_SCORE_UPDATED', { riskScore: currentRiskScore, riskLevel });
+          io.to(`session:${session_id}`).emit('RISK_SCORE_UPDATED', { riskScore: currentRiskScore, riskLevel });
+
+          // Relay live alert to Host Proctor Room via Socket.IO
+          if (effectiveRoomId) {
+            io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', alertPayload);
+            io.to(`room:proctor:${effectiveRoomId}`).emit('proctor_alert', alertPayload);
+            io.to(`room_${effectiveRoomId}`).emit('proctor_alert', alertPayload);
+            io.to(`proctor:${effectiveRoomId}`).emit('AI_EVENT', alertPayload);
+            io.to(`room_${effectiveRoomId}`).emit('AI_EVENT', alertPayload);
+            io.to(`proctor:${effectiveRoomId}`).emit('AI_ALERT_CREATED', alertPayload);
+            io.to(`room_${effectiveRoomId}`).emit('AI_ALERT_CREATED', alertPayload);
+            io.to(`proctor:${effectiveRoomId}`).emit('proctor:event', alertPayload);
+            io.to(`proctor:${effectiveRoomId}`).emit('participant_risk_updated', {
               roomId: effectiveRoomId,
               sessionId: session_id,
               candidateId: userId,
               candidateName: session.userName,
-              type: evt.type,
-              eventType: evt.type,
-              severity,
               riskScore: currentRiskScore,
-              timestamp: new Date().toISOString(),
-              message: evt.evidence || `AI detected ${evt.type.replace(/_/g, ' ')}`,
-              confidence: Number(evt.confidence) || 0.85,
-            };
-            io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', alertPayload);
-            io.to(`room_${effectiveRoomId}`).emit('proctor_alert', alertPayload);
-            io.to(`proctor:${effectiveRoomId}`).emit('AI_EVENT', alertPayload);
-            io.to(`room_${effectiveRoomId}`).emit('AI_EVENT', alertPayload);
+              riskLevel,
+              violations: session.totalAlerts,
+            });
+            io.to(`room_${effectiveRoomId}`).emit('participant_risk_updated', {
+              roomId: effectiveRoomId,
+              sessionId: session_id,
+              candidateId: userId,
+              candidateName: session.userName,
+              riskScore: currentRiskScore,
+              riskLevel,
+              violations: session.totalAlerts,
+            });
+
+            if (roomOwnerId) {
+              io.to(`user:${roomOwnerId}`).emit('proctor_alert', alertPayload);
+              io.to(`user:${roomOwnerId}`).emit('AI_EVENT', alertPayload);
+              io.to(`user:${roomOwnerId}`).emit('AI_ALERT_CREATED', alertPayload);
+              io.to(`user:${roomOwnerId}`).emit('ALERT_CREATED', alertPayload);
+            }
           }
         }
       }
@@ -262,35 +336,71 @@ const logUnifiedEvent = async (req, res, next) => {
 const getDashboardStats = async (req, res, next) => {
   try {
     const timeRange = (req.query.timeRange || '30D').toUpperCase();
-    let query = {};
+    let sessionQuery = {};
+    let alertQuery = {};
+
     if (req.user && req.user.role !== 'admin') {
-      query.userEmail = req.user.email;
+      const userId = String(req.user._id || req.user.id);
+      const userEmails = [req.user.email, req.user.email?.toLowerCase()].filter(Boolean);
+
+      // Find all rooms owned by this user
+      const hostedRooms = await Room.find({
+        $or: [
+          { ownerId: userId },
+          { createdBy: userId },
+          { hostUserId: userId },
+          { 'host.id': userId },
+          { 'host.email': { $in: userEmails } },
+        ]
+      }).select('roomId').lean();
+      const hostedRoomIds = hostedRooms.map(r => r.roomId);
+
+      const sessionConditions = [
+        { userEmail: { $in: userEmails } },
+        { userId: userId }
+      ];
+      if (hostedRoomIds.length > 0) {
+        sessionConditions.push({ roomId: { $in: hostedRoomIds } });
+        sessionConditions.push({ hostId: userId });
+      }
+      sessionQuery.$or = sessionConditions;
+
+      const alertConditions = [
+        { userEmail: { $in: userEmails } },
+        { participantId: userId },
+        { studentId: userId }
+      ];
+      if (hostedRoomIds.length > 0) {
+        alertConditions.push({ roomId: { $in: hostedRoomIds } });
+        alertConditions.push({ hostId: userId });
+      }
+      alertQuery.$or = alertConditions;
     }
 
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
-    const totalSessionsCount = await Session.countDocuments(query);
+    const totalSessionsCount = await Session.countDocuments(sessionQuery);
     const activeSessionsCount = await Session.countDocuments({
-      ...query,
+      ...sessionQuery,
       status: { $in: ['ACTIVE', 'LIVE', 'WARNING', 'READY'] }
     });
     const completedSessionsCount = await Session.countDocuments({
-      ...query,
+      ...sessionQuery,
       status: 'COMPLETED'
     });
     const todaySessionsCount = await Session.countDocuments({
-      ...query,
+      ...sessionQuery,
       createdAt: { $gte: startOfDay }
     });
 
-    const totalAlertsCount = await Alert.countDocuments(query);
+    const totalAlertsCount = await Alert.countDocuments(alertQuery);
     const criticalAlertsCount = await Alert.countDocuments({
-      ...query,
+      ...alertQuery,
       severity: { $in: ['CRITICAL', 'danger'] }
     });
     const highAlertsCount = await Alert.countDocuments({
-      ...query,
+      ...alertQuery,
       severity: { $in: ['HIGH', 'warning'] }
     });
 
@@ -342,10 +452,10 @@ const getDashboardStats = async (req, res, next) => {
 
     for (const b of buckets) {
       const [createdCount, startedCount, completedCount, suspendedCount] = await Promise.all([
-        Session.countDocuments({ ...query, createdAt: { $gte: b.start, $lt: b.end } }),
-        Session.countDocuments({ ...query, startTime: { $gte: b.start, $lt: b.end } }),
-        Session.countDocuments({ ...query, status: 'COMPLETED', updatedAt: { $gte: b.start, $lt: b.end } }),
-        Session.countDocuments({ ...query, status: 'SUSPENDED', updatedAt: { $gte: b.start, $lt: b.end } }),
+        Session.countDocuments({ ...sessionQuery, createdAt: { $gte: b.start, $lt: b.end } }),
+        Session.countDocuments({ ...sessionQuery, startTime: { $gte: b.start, $lt: b.end } }),
+        Session.countDocuments({ ...sessionQuery, status: 'COMPLETED', updatedAt: { $gte: b.start, $lt: b.end } }),
+        Session.countDocuments({ ...sessionQuery, status: 'SUSPENDED', updatedAt: { $gte: b.start, $lt: b.end } }),
       ]);
 
       sessionsOverTime.push({
@@ -357,10 +467,10 @@ const getDashboardStats = async (req, res, next) => {
       });
 
       const [criticalCount, highCount, mediumCount, lowCount] = await Promise.all([
-        Alert.countDocuments({ ...query, severity: { $in: ['CRITICAL', 'danger'] }, timestamp: { $gte: b.start, $lt: b.end } }),
-        Alert.countDocuments({ ...query, severity: { $in: ['HIGH', 'warning'] }, timestamp: { $gte: b.start, $lt: b.end } }),
-        Alert.countDocuments({ ...query, severity: 'MEDIUM', timestamp: { $gte: b.start, $lt: b.end } }),
-        Alert.countDocuments({ ...query, severity: { $in: ['LOW', 'INFO', 'info'] }, timestamp: { $gte: b.start, $lt: b.end } }),
+        Alert.countDocuments({ ...alertQuery, severity: { $in: ['CRITICAL', 'danger'] }, timestamp: { $gte: b.start, $lt: b.end } }),
+        Alert.countDocuments({ ...alertQuery, severity: { $in: ['HIGH', 'warning'] }, timestamp: { $gte: b.start, $lt: b.end } }),
+        Alert.countDocuments({ ...alertQuery, severity: 'MEDIUM', timestamp: { $gte: b.start, $lt: b.end } }),
+        Alert.countDocuments({ ...alertQuery, severity: { $in: ['LOW', 'INFO', 'info'] }, timestamp: { $gte: b.start, $lt: b.end } }),
       ]);
 
       alertsOverTime.push({
@@ -372,8 +482,8 @@ const getDashboardStats = async (req, res, next) => {
       });
     }
 
-    const recentAlerts = await Alert.find(query).sort({ timestamp: -1 }).limit(10);
-    const recentSessions = await Session.find(query).sort({ startTime: -1 }).limit(10);
+    const recentAlerts = await Alert.find(alertQuery).sort({ timestamp: -1 }).limit(10);
+    const recentSessions = await Session.find(sessionQuery).sort({ startTime: -1 }).limit(10);
 
     const timelineItems = recentAlerts.map(alert => ({
       id: alert._id,
@@ -415,9 +525,33 @@ const getAlerts = async (req, res, next) => {
   try {
     let query = {};
     if (req.user && req.user.role !== 'admin') {
-      query.userEmail = req.user.email;
+      const userId = String(req.user._id || req.user.id);
+      const userEmails = [req.user.email, req.user.email?.toLowerCase()].filter(Boolean);
+
+      // Find all rooms owned by this user
+      const hostedRooms = await Room.find({
+        $or: [
+          { ownerId: userId },
+          { createdBy: userId },
+          { hostUserId: userId },
+          { 'host.id': userId },
+          { 'host.email': { $in: userEmails } },
+        ]
+      }).select('roomId').lean();
+      const hostedRoomIds = hostedRooms.map(r => r.roomId);
+
+      const alertConditions = [
+        { userEmail: { $in: userEmails } },
+        { participantId: userId },
+        { studentId: userId },
+      ];
+      if (hostedRoomIds.length > 0) {
+        alertConditions.push({ roomId: { $in: hostedRoomIds } });
+        alertConditions.push({ hostId: userId });
+      }
+      query.$or = alertConditions;
     }
-    const alerts = await Alert.find(query).sort({ timestamp: -1 });
+    const alerts = await Alert.find(query).sort({ timestamp: -1 }).lean();
     res.json({ success: true, alerts });
   } catch (error) {
     next(error);
@@ -429,47 +563,104 @@ const getAlerts = async (req, res, next) => {
 // @access  Private / Public
 const getSessions = async (req, res, next) => {
   try {
-    const { filter = 'ALL', search = '' } = req.query;
+    const { filter = 'ALL', search = '', mode = 'ALL' } = req.query;
     let query = {};
 
     if (req.user && req.user.role !== 'admin') {
+      const userId = String(req.user._id || req.user.id);
+      const userEmails = [req.user.email, req.user.email?.toLowerCase()].filter(Boolean);
       const userConditions = [
-        { userEmail: req.user.email },
-        { userEmail: req.user.email.toLowerCase() },
+        { userEmail: { $in: userEmails } },
+        { userId: userId },
       ];
-      if (req.user._id) userConditions.push({ userId: String(req.user._id) });
-      if (req.user.id) userConditions.push({ userId: String(req.user.id) });
+
+      // If user is a host of any virtual rooms, include sessions from their hosted rooms
+      const hostedRooms = await Room.find({
+        $or: [
+          { ownerId: userId },
+          { createdBy: userId },
+          { hostUserId: userId },
+          { 'host.id': userId },
+          { 'host.email': { $in: userEmails } },
+        ]
+      }).select('roomId').lean();
+      const hostedRoomIds = hostedRooms.map(r => r.roomId);
+      if (hostedRoomIds.length > 0) {
+        userConditions.push({ roomId: { $in: hostedRoomIds } });
+        userConditions.push({ hostId: userId });
+      }
+
       query.$or = userConditions;
     }
 
     if (filter === 'ACTIVE') {
       query.status = { $in: ['ACTIVE', 'LIVE', 'WARNING', 'READY'] };
+    } else if (filter === 'COMPLETED') {
+      query.status = { $in: ['COMPLETED', 'EXITED'] };
+    } else if (filter === 'SUSPENDED') {
+      query.status = { $in: ['SUSPENDED', 'SUSPENDING', 'FLAGGED'] };
     } else if (filter === 'FLAGGED') {
       query.status = { $in: ['SUSPENDED', 'SUSPENDING', 'FLAGGED', 'WARNING'] };
+    }
+
+    if (mode && mode !== 'ALL') {
+      const modeConditions = [
+        { mode: { $regex: `^${mode}$`, $options: 'i' } },
+        { sessionType: { $regex: `^${mode}$`, $options: 'i' } },
+      ];
+      if (query.$or) {
+        query = { $and: [{ $or: query.$or }, { $or: modeConditions }] };
+      } else {
+        query.$or = modeConditions;
+      }
     }
 
     if (search) {
       const searchConditions = [
         { sessionId: { $regex: search, $options: 'i' } },
+        { roomId: { $regex: search, $options: 'i' } },
         { userName: { $regex: search, $options: 'i' } },
         { userEmail: { $regex: search, $options: 'i' } },
         { mode: { $regex: search, $options: 'i' } },
         { roomTitle: { $regex: search, $options: 'i' } },
+        { hostName: { $regex: search, $options: 'i' } },
       ];
-      if (query.$or) {
-        const userOr = query.$or;
-        delete query.$or;
-        query.$and = [
-          { $or: userOr },
-          { $or: searchConditions }
-        ];
+      if (query.$and) {
+        query.$and.push({ $or: searchConditions });
+      } else if (query.$or) {
+        const existingOr = query.$or;
+        query = { $and: [{ $or: existingOr }, { $or: searchConditions }] };
       } else {
         query.$or = searchConditions;
       }
     }
 
-    const sessions = await Session.find(query).sort({ createdAt: -1 });
-    res.json({ success: true, count: sessions.length, sessions });
+    const sessions = await Session.find(query).sort({ createdAt: -1 }).lean();
+
+    // Enrich sessions with matching room details and report presence
+    const sessionIds = sessions.map(s => s.sessionId);
+    const existingReports = await Report.find({ sessionId: { $in: sessionIds } }).select('reportId sessionId status').lean();
+    const reportMap = new Map(existingReports.map(r => [r.sessionId, r]));
+
+    const roomIds = sessions.map(s => s.roomId).filter(Boolean);
+    const rooms = await Room.find({ roomId: { $in: roomIds } }).select('roomId title host').lean();
+    const roomMap = new Map(rooms.map(r => [r.roomId, r]));
+
+    const enrichedSessions = sessions.map(s => {
+      const matchedReport = reportMap.get(s.sessionId);
+      const matchedRoom = roomMap.get(s.roomId);
+      return {
+        ...s,
+        roomTitle: s.roomTitle || matchedRoom?.title || (s.roomId ? `Room ${s.roomId}` : 'Monitored Session'),
+        hostName: s.hostName || matchedRoom?.host?.name || 'Session Host',
+        hostEmail: s.hostEmail || matchedRoom?.host?.email || '',
+        reportId: matchedReport?.reportId || null,
+        hasReport: Boolean(matchedReport),
+        reportStatus: matchedReport?.status || null,
+      };
+    });
+
+    res.json({ success: true, count: enrichedSessions.length, sessions: enrichedSessions });
   } catch (error) {
     next(error);
   }
@@ -481,8 +672,8 @@ const getSessions = async (req, res, next) => {
 const getSessionById = async (req, res, next) => {
   try {
     const { sessionId } = req.params;
-    const session = await Session.findOne({ sessionId });
-    if (!session) {
+    const sessionDoc = await Session.findOne({ sessionId });
+    if (!sessionDoc) {
       return res.status(404).json({ success: false, message: 'Session not found' });
     }
 
@@ -496,11 +687,30 @@ const getSessionById = async (req, res, next) => {
       status: a.status,
     }));
 
+    const sessionObj = sessionDoc.toObject ? sessionDoc.toObject() : sessionDoc;
+    let room = null;
+    const effectiveRoomId = sessionObj.roomId || (sessionId.startsWith('TRV-') ? (sessionId.startsWith('TRV-TRV-') ? sessionId.split('-').slice(1, 3).join('-') : sessionId.split('-').slice(0, 2).join('-')) : null);
+    if (effectiveRoomId) {
+      room = await Room.findOne({ roomId: effectiveRoomId }).lean();
+    }
+    const report = await Report.findOne({ sessionId }).select('reportId verdict overallIntegrityScore status').lean();
+
+    const enrichedSession = {
+      ...sessionObj,
+      roomId: effectiveRoomId,
+      roomTitle: sessionObj.roomTitle || (room ? room.title : (effectiveRoomId ? `Room ${effectiveRoomId}` : 'Proctor Examination')),
+      hostName: sessionObj.hostName || (room?.host ? (room.host.name || room.host.fullName) : 'Proctor Host'),
+      hostEmail: sessionObj.hostEmail || (room?.host ? room.host.email : ''),
+      hasReport: !!report,
+      reportId: report?.reportId || null,
+    };
+
     res.json({
       success: true,
-      session,
+      session: enrichedSession,
       alerts,
       timeline,
+      report,
     });
   } catch (error) {
     next(error);
@@ -598,6 +808,25 @@ const endSession = async (req, res, next) => {
       });
     }
 
+    const effectiveRoomId = session.roomId || req.body?.roomId || (sessionId.startsWith('TRV-') ? (sessionId.startsWith('TRV-TRV-') ? sessionId.split('-').slice(1, 3).join('-') : sessionId.split('-').slice(0, 2).join('-')) : null);
+    if (!session.roomId && effectiveRoomId) {
+      session.roomId = effectiveRoomId;
+    }
+    if (!session.roomTitle && effectiveRoomId) {
+      const room = await Room.findOne({ roomId: effectiveRoomId }).lean();
+      if (room) {
+        session.roomTitle = room.title;
+        session.hostId = String(room.host?.id || '');
+        session.hostName = room.host?.name || 'Session Host';
+        session.hostEmail = room.host?.email || '';
+      }
+    }
+    if (req.user) {
+      if (!session.userId) session.userId = String(req.user._id || req.user.id);
+      if (!session.userName || session.userName === 'Student Candidate') session.userName = req.user.fullName || req.user.name;
+      if (!session.userEmail || session.userEmail === 'student@trueview.ai') session.userEmail = req.user.email;
+    }
+
     session.endTime = new Date();
     session.status = 'COMPLETED';
     const durationSeconds = Math.max(0, Math.round((new Date(session.endTime) - new Date(session.startTime)) / 1000));
@@ -634,9 +863,13 @@ const endSession = async (req, res, next) => {
       report = await Report.create({
         reportId,
         sessionId,
+        roomId: effectiveRoomId,
+        roomTitle: session.roomTitle || req.body?.roomTitle || null,
+        candidateId: session.userId || (req.user ? String(req.user._id) : null),
         userName: session.userName,
         userEmail: session.userEmail,
         sessionType: session.mode || session.sessionType || 'EXAM',
+        mode: session.mode || session.sessionType || 'EXAM',
         startTime: session.startTime,
         endTime: session.endTime,
         durationSeconds,
@@ -652,8 +885,12 @@ const endSession = async (req, res, next) => {
         })),
         timeline,
         status,
+        verdict: status,
       });
     } else {
+      if (effectiveRoomId && !report.roomId) report.roomId = effectiveRoomId;
+      if (session.roomTitle && !report.roomTitle) report.roomTitle = session.roomTitle;
+      if (session.userId && !report.candidateId) report.candidateId = session.userId;
       report.endTime = session.endTime;
       report.durationSeconds = durationSeconds;
       report.overallIntegrityScore = score;
@@ -661,6 +898,7 @@ const endSession = async (req, res, next) => {
       report.totalViolations = totalViolations;
       report.phoneDetections = phoneDetections;
       report.status = status;
+      report.verdict = status;
       report.timeline = timeline;
       await report.save();
     }
@@ -676,6 +914,298 @@ const endSession = async (req, res, next) => {
   }
 };
 
+// @desc    Record candidate tab switch violation, increment authoritative count, check termination limit
+// @route   POST /api/ai-engine/sessions/:sessionId/tab-switch
+// @access  Public / Private
+const recordTabSwitch = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const { roomId: reqRoomId } = req.body || {};
+
+    let session = await Session.findOne({ sessionId });
+    if (!session) {
+      session = await Session.findOne({ sessionId: { $regex: `^${sessionId}$`, $options: 'i' } });
+    }
+    if (!session) {
+      return res.status(404).json({ success: false, message: 'Session not found' });
+    }
+
+    const maxAllowed = session.maxTabSwitches || 3;
+
+    // If session is already terminated, return current state
+    if (session.status === 'TERMINATED') {
+      return res.json({
+        success: true,
+        sessionId,
+        count: session.tabSwitchCount || (maxAllowed + 1),
+        maxAllowed,
+        tabSwitchStatus: 'TERMINATED',
+        terminated: true,
+        message: 'Session has already been terminated.',
+      });
+    }
+
+    // Authoritative increment
+    const newCount = (session.tabSwitchCount || 0) + 1;
+    session.tabSwitchCount = newCount;
+
+    let tabSwitchStatus = 'NORMAL';
+    let isTerminated = false;
+    let eventType = 'TAB_SWITCH_DETECTED';
+    let severity = 'MEDIUM';
+    let warningMessage = '';
+
+    if (newCount === 1) {
+      tabSwitchStatus = 'WARNING';
+      warningMessage = `Tab switch detected (Warning 1 of ${maxAllowed}). Please return to the examination window.`;
+    } else if (newCount === 2) {
+      tabSwitchStatus = 'WARNING';
+      warningMessage = `Tab switch detected (Warning 2 of ${maxAllowed}).`;
+    } else if (newCount === 3) {
+      tabSwitchStatus = 'FINAL_WARNING';
+      warningMessage = `Final warning: Tab switch detected (Warning 3 of ${maxAllowed}). One more tab switch will terminate your session.`;
+    } else {
+      // 4th or more: TERMINATE
+      tabSwitchStatus = 'TERMINATED';
+      isTerminated = true;
+      eventType = 'TAB_SWITCH_LIMIT_EXCEEDED';
+      severity = 'CRITICAL';
+      warningMessage = `Session terminated: Maximum tab-switch limit exceeded (${newCount}/${maxAllowed}).`;
+
+      session.status = 'TERMINATED';
+      session.terminationReason = 'Maximum tab-switch limit exceeded';
+      session.terminatedAt = new Date();
+      session.endTime = new Date();
+      session.overallIntegrityScore = Math.max(0, (session.overallIntegrityScore || 100) - 50);
+    }
+
+    session.tabSwitchStatus = tabSwitchStatus;
+
+    if (!session.tabSwitchEvents) session.tabSwitchEvents = [];
+    const eventRecord = {
+      timestamp: new Date(),
+      count: newCount,
+      maxAllowed,
+      severity,
+      eventType,
+      message: warningMessage,
+    };
+    session.tabSwitchEvents.push(eventRecord);
+
+    if (!session.timeline) session.timeline = [];
+    session.timeline.push({
+      timestamp: new Date(),
+      eventType,
+      severity,
+      evidence: warningMessage,
+    });
+
+    session.totalAlerts = (session.totalAlerts || 0) + 1;
+    if (isTerminated) {
+      session.criticalAlertsCount = (session.criticalAlertsCount || 0) + 1;
+    }
+    await session.save();
+
+    // Resolve room owner and room
+    const effectiveRoomId = session.roomId || reqRoomId || (sessionId.startsWith('TRV-') ? (sessionId.startsWith('TRV-TRV-') ? sessionId.split('-').slice(1, 3).join('-') : sessionId.split('-').slice(0, 2).join('-')) : null);
+
+    let roomOwnerId = null;
+    let roomDoc = null;
+    if (effectiveRoomId) {
+      try {
+        roomDoc = await Room.findOne({
+          $or: [
+            { roomId: effectiveRoomId.toUpperCase() },
+            { joinCode: effectiveRoomId.toUpperCase() }
+          ]
+        });
+        if (roomDoc) {
+          roomOwnerId = roomDoc.ownerId || roomDoc.createdBy || roomDoc.hostUserId || roomDoc.host?.id;
+
+          // Update participant in room participants array
+          if (roomDoc.participants) {
+            const pIdx = roomDoc.participants.findIndex(p => p.sessionId === sessionId || p.id === session.userId || p.email === session.userEmail);
+            if (pIdx >= 0) {
+              roomDoc.participants[pIdx].tabSwitchCount = newCount;
+              roomDoc.participants[pIdx].tabSwitchStatus = tabSwitchStatus;
+              roomDoc.participants[pIdx].violations = (roomDoc.participants[pIdx].violations || 0) + 1;
+
+              if (isTerminated) {
+                roomDoc.participants[pIdx].status = 'TERMINATED';
+                roomDoc.participants[pIdx].riskLevel = 'CRITICAL';
+                roomDoc.participants[pIdx].riskScore = 100;
+                roomDoc.participants[pIdx].terminationReason = 'TAB SWITCH LIMIT EXCEEDED';
+              } else {
+                roomDoc.participants[pIdx].riskScore = Math.min(100, (roomDoc.participants[pIdx].riskScore || 0) + 15);
+                roomDoc.participants[pIdx].riskLevel = roomDoc.participants[pIdx].riskScore > 60 ? 'HIGH' : 'MEDIUM';
+              }
+              await roomDoc.save();
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Create Alert record in MongoDB
+    await Alert.create({
+      sessionId,
+      roomId: effectiveRoomId,
+      hostId: roomOwnerId,
+      studentId: session.userId,
+      participantId: session.userId,
+      userName: session.userName,
+      userEmail: session.userEmail,
+      type: eventType,
+      eventType,
+      severity,
+      confidence: 1.0,
+      evidence: warningMessage,
+      description: warningMessage,
+      status: 'OPEN',
+      timestamp: new Date(),
+    });
+
+    // If terminated, create or update Report record
+    if (isTerminated) {
+      try {
+        let report = await Report.findOne({ sessionId });
+        const reportId = report?.reportId || `RPT-${Date.now().toString().slice(-6)}`;
+        if (!report) {
+          report = await Report.create({
+            reportId,
+            sessionId,
+            roomId: effectiveRoomId,
+            roomTitle: session.roomTitle,
+            candidateId: session.userId,
+            userName: session.userName,
+            userEmail: session.userEmail,
+            mode: session.mode || 'EXAM',
+            sessionType: session.sessionType || 'EXAM',
+            status: 'FLAGGED',
+            verdict: 'TERMINATED',
+            overallIntegrityScore: 40,
+            riskLevel: 'CRITICAL',
+            tabSwitches: newCount,
+            maxTabSwitches: maxAllowed,
+            terminated: true,
+            terminationReason: 'Maximum tab-switch limit exceeded',
+            tabSwitchTimeline: session.tabSwitchEvents,
+            startTime: session.startTime,
+            endTime: session.endTime,
+          });
+        } else {
+          report.status = 'FLAGGED';
+          report.verdict = 'TERMINATED';
+          report.overallIntegrityScore = Math.min(report.overallIntegrityScore || 50, 40);
+          report.riskLevel = 'CRITICAL';
+          report.tabSwitches = newCount;
+          report.maxTabSwitches = maxAllowed;
+          report.terminated = true;
+          report.terminationReason = 'Maximum tab-switch limit exceeded';
+          report.tabSwitchTimeline = session.tabSwitchEvents;
+          report.endTime = session.endTime;
+          await report.save();
+        }
+      } catch (_) {}
+    }
+
+    // Real-time Socket.IO Broadcasts
+    const io = req.app.get('io');
+    if (io) {
+      const payload = {
+        type: eventType,
+        eventType,
+        severity,
+        roomId: effectiveRoomId,
+        sessionId,
+        studentId: session.userId,
+        candidateId: session.userId,
+        studentName: session.userName,
+        candidateName: session.userName,
+        count: newCount,
+        maxAllowed,
+        tabSwitchCount: newCount,
+        tabSwitchStatus,
+        status: isTerminated ? 'TERMINATED' : 'WARNING',
+        reason: isTerminated ? 'TAB SWITCH LIMIT EXCEEDED' : `Warning ${newCount}/${maxAllowed}`,
+        message: warningMessage,
+        description: warningMessage,
+        evidence: warningMessage,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Candidate session channels
+      io.to(`room_${sessionId}`).emit('TAB_SWITCH_EVENT', payload);
+      io.to(`session:${sessionId}`).emit('TAB_SWITCH_EVENT', payload);
+      io.to(`room_${sessionId}`).emit(eventType, payload);
+      io.to(`session:${sessionId}`).emit(eventType, payload);
+      if (isTerminated) {
+        io.to(`room_${sessionId}`).emit('SESSION_TERMINATED', payload);
+        io.to(`session:${sessionId}`).emit('SESSION_TERMINATED', payload);
+      }
+
+      // Room and host channels
+      if (effectiveRoomId) {
+        io.to(`proctor:${effectiveRoomId}`).emit('TAB_SWITCH_EVENT', payload);
+        io.to(`proctor:${effectiveRoomId}`).emit(eventType, payload);
+        io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', payload);
+        io.to(`proctor:${effectiveRoomId}`).emit('AI_ALERT_CREATED', payload);
+        io.to(`room_${effectiveRoomId}`).emit('proctor_alert', payload);
+        io.to(`room_${effectiveRoomId}`).emit('AI_ALERT_CREATED', payload);
+        io.to(`proctor:${effectiveRoomId}`).emit('participant_risk_updated', {
+          roomId: effectiveRoomId,
+          sessionId,
+          candidateId: session.userId,
+          candidateName: session.userName,
+          tabSwitchCount: newCount,
+          tabSwitchStatus,
+          status: isTerminated ? 'TERMINATED' : 'MONITORING',
+          riskLevel: isTerminated ? 'CRITICAL' : 'HIGH',
+          riskScore: isTerminated ? 100 : (session.peakRiskScore || 40),
+          violations: session.totalAlerts,
+        });
+
+        if (isTerminated) {
+          io.to(`proctor:${effectiveRoomId}`).emit('SESSION_TERMINATED', payload);
+          io.to(`room_${effectiveRoomId}`).emit('SESSION_TERMINATED', payload);
+        }
+
+        // Direct notification to Room Owner's personal channel
+        if (roomOwnerId) {
+          io.to(`user:${roomOwnerId}`).emit('TAB_SWITCH_EVENT', payload);
+          io.to(`user:${roomOwnerId}`).emit(eventType, payload);
+          io.to(`user:${roomOwnerId}`).emit('proctor_alert', payload);
+          io.to(`user:${roomOwnerId}`).emit('AI_ALERT_CREATED', payload);
+          io.to(`user:${roomOwnerId}`).emit('participant_risk_updated', {
+            roomId: effectiveRoomId,
+            sessionId,
+            candidateId: session.userId,
+            candidateName: session.userName,
+            tabSwitchCount: newCount,
+            tabSwitchStatus,
+            status: isTerminated ? 'TERMINATED' : 'MONITORING',
+            riskLevel: isTerminated ? 'CRITICAL' : 'HIGH',
+            riskScore: isTerminated ? 100 : (session.peakRiskScore || 40),
+            violations: session.totalAlerts,
+          });
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      sessionId,
+      count: newCount,
+      maxAllowed,
+      tabSwitchStatus,
+      terminated: isTerminated,
+      message: warningMessage,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   logUnifiedEvent,
   getDashboardStats,
@@ -684,4 +1214,5 @@ module.exports = {
   getSessionById,
   uploadSessionRecording,
   endSession,
+  recordTabSwitch,
 };

@@ -168,9 +168,11 @@ function evaluateEventSeverity(eventType, sessionType = 'EXAM') {
 
     case 'MULTIPLE_FACES_DETECTED':
     case 'MULTIPLE_PERSONS':
+    case 'MULTIPLE_PEOPLE_DETECTED':
       return rules.multipleFaces.severity;
 
     case 'PHONE_DETECTED':
+    case 'MOBILE_PHONE_DETECTED':
       return rules.phoneDetection.severity;
 
     case 'UNAUTHORIZED_OBJECT':
@@ -178,6 +180,7 @@ function evaluateEventSeverity(eventType, sessionType = 'EXAM') {
 
     // Identity mismatch uses the identity rule, NOT the speaker rule.
     case 'IDENTITY_MISMATCH':
+    case 'POSSIBLE_USER_REPLACEMENT':
       return rules.identityVerification.severityOnMismatch;
 
     // Liveness / anti-spoof failures use the liveness rule (spec: a critical
@@ -197,7 +200,12 @@ function evaluateEventSeverity(eventType, sessionType = 'EXAM') {
     case 'OFFSCREEN_GLANCE':
     case 'REPEATED_DISTRACTION':
     case 'PROLONGED_DISTRACTION':
+    case 'EYES_CLOSED':
       return rules.gazeDeviation.severity;
+
+    case 'HEAD_TURNED':
+    case 'HEAD_MOVEMENT':
+      return sessionType === 'EXAM' ? 'MEDIUM' : 'LOW';
 
     case 'PARTICIPANT_JOINED':
     case 'PARTICIPANT_LEFT':

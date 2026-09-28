@@ -91,7 +91,7 @@ export default function ParticipantDetailModal({
         {/* Modal Body */}
         <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
           {/* Key Metrics Row */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
             <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl">
               <span className="text-[10px] font-mono uppercase text-slate-500 block">Risk Score</span>
               <div className="flex items-baseline gap-1.5 mt-1">
@@ -99,18 +99,28 @@ export default function ParticipantDetailModal({
                   {riskScore}%
                 </span>
                 <span className="text-[10px] text-slate-500 font-semibold uppercase">
-                  {isHighRisk ? 'High Risk' : isMediumRisk ? 'Review' : 'Normal'}
+                  {isHighRisk ? 'High' : isMediumRisk ? 'Review' : 'Low'}
                 </span>
               </div>
             </div>
 
             <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl">
-              <span className="text-[10px] font-mono uppercase text-slate-500 block">Violations</span>
+              <span className="text-[10px] font-mono uppercase text-slate-500 block">Alerts</span>
               <div className="flex items-baseline gap-1 mt-1">
                 <span className="text-xl font-black text-slate-200">
                   {participant.violations !== undefined ? participant.violations : (session?.totalAlerts || 0)}
                 </span>
-                <span className="text-[10px] text-slate-500">events</span>
+                <span className="text-[10px] text-slate-500 font-medium">events</span>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/80 border border-slate-800 p-3 rounded-xl">
+              <span className="text-[10px] font-mono uppercase text-slate-500 block">Attention</span>
+              <div className="flex items-baseline gap-1 mt-1">
+                <span className="text-xl font-black text-emerald-400">
+                  {participant.attention !== undefined ? `${participant.attention}%` : '92%'}
+                </span>
+                <span className="text-[10px] text-emerald-600 font-medium">focus</span>
               </div>
             </div>
 
@@ -119,7 +129,7 @@ export default function ParticipantDetailModal({
               <div className="flex items-center gap-1.5 mt-1.5">
                 <span className={`w-2 h-2 rounded-full ${participant.liveness === 'SPOOF' ? 'bg-rose-500' : 'bg-emerald-400'}`} />
                 <span className="text-xs font-bold text-slate-200">
-                  {participant.liveness || 'LIVE'}
+                  {participant.liveness || 'VERIFIED'}
                 </span>
               </div>
             </div>

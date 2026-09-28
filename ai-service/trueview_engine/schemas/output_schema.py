@@ -71,7 +71,9 @@ class EnvironmentStatus(BaseModel):
 
 class BehaviourEventItem(BaseModel):
     event_id: str
+    id: Optional[str] = None
     session_id: str
+    sessionId: Optional[str] = None
     timestamp: str
     type: str
     severity: str                      # LOW | MEDIUM | HIGH | CRITICAL
@@ -79,6 +81,10 @@ class BehaviourEventItem(BaseModel):
     duration: float
     evidence: str
     state: str = "CONFIRMED"            # POTENTIAL | OBSERVING | CONFIRMED | ACTIVE | RESOLVED
+    category: Optional[str] = "BEHAVIOUR"
+    source: Optional[str] = "AI_ENGINE"
+    message: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class BehaviourSummary(BaseModel):

@@ -90,7 +90,7 @@ class ContinuousAuthenticator:
         if should_check and face_rec_result:
             is_match = bool(face_rec_result.get("verified", False) or face_rec_result.get("status") == "VERIFIED")
             rec_conf = float(face_rec_result.get("confidence", 0.0))
-            is_mismatch = (not is_match) and face_rec_result.get("status") == "MISMATCH"
+            is_mismatch = (not is_match) and (face_rec_result.get("status") == "MISMATCH" or face_rec_result.get("verified") is False)
 
             if is_match:
                 state["mismatch_counter"] = 0

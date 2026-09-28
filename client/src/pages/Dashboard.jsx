@@ -388,7 +388,7 @@ export default function Dashboard() {
 
           <div className="w-full h-[270px] mt-4">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={sessionsData} margin={{ top: 15, right: 10, left: -25, bottom: 0 }}>
+              <AreaChart data={sessionsData} margin={{ top: 15, right: 15, left: 15, bottom: 20 }}>
                 <defs>
                   <linearGradient id="colorCompleted" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#10b981" stopOpacity={0.25} />
@@ -402,6 +402,15 @@ export default function Dashboard() {
                   fontSize={11}
                   tickLine={false}
                   axisLine={false}
+                  label={{
+                    value: "Date",
+                    position: "insideBottom",
+                    offset: -5,
+                    fill: "#64748b",
+                    fontSize: 11,
+                    fontWeight: 500,
+                    style: { textAnchor: "middle", fill: "#64748b", fontSize: "11px", fontWeight: 500 },
+                  }}
                 />
                 <YAxis
                   domain={[0, maxSessionsValue]}
@@ -410,6 +419,16 @@ export default function Dashboard() {
                   fontSize={11}
                   tickLine={false}
                   axisLine={false}
+                  label={{
+                    value: "Number of Sessions",
+                    angle: -90,
+                    position: "insideLeft",
+                    offset: 0,
+                    fill: "#64748b",
+                    fontSize: 11,
+                    fontWeight: 500,
+                    style: { textAnchor: "middle", fill: "#64748b", fontSize: "11px", fontWeight: 500 },
+                  }}
                 />
                 <Tooltip content={<SessionsCustomTooltip />} />
                 
@@ -488,7 +507,7 @@ export default function Dashboard() {
 
           <div className="w-full h-[270px] mt-4">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={alertsData} margin={{ top: 15, right: 10, left: -20, bottom: 0 }}>
+              <BarChart data={alertsData} margin={{ top: 15, right: 15, left: 15, bottom: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
                 <XAxis
                   dataKey="date"
@@ -496,6 +515,15 @@ export default function Dashboard() {
                   fontSize={11}
                   tickLine={false}
                   axisLine={false}
+                  label={{
+                    value: "Date",
+                    position: "insideBottom",
+                    offset: -5,
+                    fill: "#64748b",
+                    fontSize: 11,
+                    fontWeight: 500,
+                    style: { textAnchor: "middle", fill: "#64748b", fontSize: "11px", fontWeight: 500 },
+                  }}
                 />
                 <YAxis
                   domain={[0, maxAlertsValue]}
@@ -504,6 +532,16 @@ export default function Dashboard() {
                   fontSize={11}
                   tickLine={false}
                   axisLine={false}
+                  label={{
+                    value: "Number of Alerts",
+                    angle: -90,
+                    position: "insideLeft",
+                    offset: 0,
+                    fill: "#64748b",
+                    fontSize: 11,
+                    fontWeight: 500,
+                    style: { textAnchor: "middle", fill: "#64748b", fontSize: "11px", fontWeight: 500 },
+                  }}
                 />
                 <Tooltip content={<AlertsCustomTooltip />} />
                 

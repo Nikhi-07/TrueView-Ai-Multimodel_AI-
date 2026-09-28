@@ -34,6 +34,7 @@ import ProctorRoom from '../pages/ProctorRoom';
 import ProctorRoomHost from '../pages/ProctorRoomHost';
 import JoinRoom from '../pages/JoinRoom';
 import VoiceRegistration from '../pages/VoiceRegistration';
+import ProctorDashboard from '../pages/ProctorDashboard';
 
 export default function AppRoutes() {
   const { isAuthenticated } = useAuth();
@@ -65,6 +66,7 @@ export default function AppRoutes() {
           <Route element={<DashboardLayout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/rooms" element={<RoomManager />} />
+            <Route path="/proctor-dashboard" element={<ProctorDashboard />} />
             <Route path="/sessions" element={<Sessions />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/alerts" element={<Alerts />} />

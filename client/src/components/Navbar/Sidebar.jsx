@@ -12,7 +12,8 @@ import { useAuth } from '../../context/AuthContext';
 const mainNavItems = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/monitoring', label: 'Live Monitoring', icon: Eye },
-  { path: '/rooms', label: 'Join Session', icon: Video },
+  { path: '/rooms', label: 'Virtual Rooms', icon: Video },
+  { path: '/proctor-dashboard', label: 'Proctor Dashboard', icon: Shield },
   { path: '/sessions', label: 'My Sessions', icon: Users },
   { path: '/reports', label: 'My Reports', icon: FileText },
   { path: '/alerts', label: 'My Alerts', icon: Bell },

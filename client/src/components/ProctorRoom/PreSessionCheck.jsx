@@ -7,6 +7,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import useFaceLandmarker from '../../hooks/useFaceLandmarker';
+import toast from 'react-hot-toast';
 
 export default function PreSessionCheck({
   room,
@@ -111,16 +112,24 @@ export default function PreSessionCheck({
 
     const handleOnline = () => setNetworkOnline(true);
     const handleOffline = () => setNetworkOnline(false);
+    const handleBeforeUnload = () => {
+      stopVerificationCamera();
+    };
+
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
 
     return () => {
       isUnmountedRef.current = true;
       stopVerificationCamera();
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
     };
-  }, []);
+  }, [stopVerificationCamera]);
 
   const captureFrameAndCtx = useCallback(() => {
     const video = videoPreviewRef.current;
@@ -234,7 +243,8 @@ export default function PreSessionCheck({
 
           if (livenessRes && livenessRes.ok) {
             const livenessData = await livenessRes.json();
-            const isLive = livenessData.is_live !== false && livenessData.status === 'LIVE' && livenessData.antiSpoof?.status !== 'SPOOF';
+            const antiSpoof = livenessData.antiSpoof || {};
+            const isLive = (livenessData.is_live === true || livenessData.status === 'LIVE' || livenessData.status === 'REAL') && antiSpoof.status !== 'SPOOF';
             
             if (livenessData.face?.detected !== false) {
               setFaceDetected(true);
@@ -249,11 +259,13 @@ export default function PreSessionCheck({
               setSpoofError(null);
             } else {
               setLivePersonVerified(false);
-              const attackType = livenessData.attack_type || livenessData.antiSpoof?.attack_type;
-              const reason = attackType && attackType !== 'NONE'
-                ? `Presentation attack detected (${attackType.replace(/_/g, ' ')}). Live human face required.`
-                : (livenessData.antiSpoof?.message || 'Presentation attack detected. Live human face required.');
-              setSpoofError(reason);
+              const attackType = livenessData.attack_type || antiSpoof.attack_type;
+              const isAttackReal = !attackType || attackType === 'NONE' || String(attackType).toLowerCase() === 'real';
+              if (!isAttackReal) {
+                setSpoofError(`Presentation attack detected (${attackType.replace(/_/g, ' ')}). Live human face required.`);
+              } else {
+                setSpoofError(antiSpoof.message || 'Live person check pending. Please look directly at the camera.');
+              }
             }
           } else {
             setLivePersonVerified(false);
@@ -287,7 +299,33 @@ export default function PreSessionCheck({
   };
 
   const handleExitClick = () => {
+    const wasCameraActive = mediaStreamRef.current !== null || cameraPermission === 'granted';
     stopVerificationCamera();
+    if (wasCameraActive) {
+      toast.success(
+        () => (
+          <div className="flex flex-col gap-0.5">
+            <span className="font-bold text-xs text-[#0F172A]">Camera turned off</span>
+            <span className="text-[11px] text-[#64748B]">
+              Camera has been disabled after leaving the monitoring room.
+            </span>
+          </div>
+        ),
+        {
+          id: 'camera-disabled-security-toast',
+          duration: 4500,
+          icon: '🔒',
+          style: {
+            background: '#FFFFFF',
+            color: '#0F172A',
+            border: '1px solid #E2E8F0',
+            borderRadius: '0.75rem',
+            boxShadow: '0 10px 25px -5px rgba(15, 23, 42, 0.1)',
+            padding: '10px 14px',
+          }
+        }
+      );
+    }
     if (onExit) {
       onExit();
     } else if (window.history.length > 1) {
@@ -321,20 +359,20 @@ export default function PreSessionCheck({
   // UNREGISTERED / UNAUTHENTICATED SCREEN
   if (authError || (!authLoading && !isAuthenticated)) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-white flex flex-col items-center justify-center p-4 font-sans select-none">
-        <div className="max-w-md w-full bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl p-8 space-y-6 text-center">
-          <div className="w-16 h-16 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
+      <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A] flex flex-col items-center justify-center p-4 font-sans select-none">
+        <div className="max-w-md w-full bg-[#FFFFFF] border border-[#E2E8F0] rounded-2xl shadow-[0_10px_30px_rgba(15,23,42,0.08)] p-8 space-y-6 text-center">
+          <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto shadow-xs">
             <Lock size={32} />
           </div>
 
           <div>
-            <span className="text-[10px] font-mono font-bold tracking-widest text-amber-400 uppercase block mb-1">
+            <span className="text-[10px] font-mono font-bold tracking-widest text-amber-700 uppercase block mb-1">
               ACCOUNT NOT REGISTERED
             </span>
-            <h2 className="text-xl font-black text-white">
+            <h2 className="text-xl font-extrabold text-[#0F172A]">
               Registration Required
             </h2>
-            <p className="text-xs text-zinc-400 mt-2 leading-relaxed">
+            <p className="text-xs text-[#64748B] mt-2 leading-relaxed">
               This proctoring session is available only to registered TrueView AI users. Please register or login before continuing.
             </p>
           </div>
@@ -342,7 +380,7 @@ export default function PreSessionCheck({
           <div className="space-y-2.5 pt-2">
             <button
               onClick={() => navigate('/login')}
-              className="w-full py-3 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl transition shadow-md flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full py-3 px-4 bg-[#10B981] hover:bg-[#059669] text-white font-bold text-xs rounded-xl transition shadow-sm flex items-center justify-center gap-2 cursor-pointer"
             >
               <LogIn size={15} />
               <span>Login to Account</span>
@@ -350,7 +388,7 @@ export default function PreSessionCheck({
 
             <button
               onClick={() => navigate('/register')}
-              className="w-full py-2.5 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 font-semibold text-xs rounded-xl transition flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full py-2.5 px-4 bg-white hover:bg-[#F8FAFC] text-[#0F172A] border border-[#CBD5E1] font-semibold text-xs rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-xs"
             >
               <UserPlus size={15} />
               <span>Register Candidate</span>
@@ -358,7 +396,7 @@ export default function PreSessionCheck({
 
             <button
               onClick={handleExitClick}
-              className="w-full py-2 text-xs text-zinc-400 hover:text-white transition flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-2 text-xs text-[#64748B] hover:text-[#0F172A] transition flex items-center justify-center gap-1.5 cursor-pointer rounded-lg hover:bg-[#F1F5F9]"
             >
               <ArrowLeft size={13} />
               <span>Exit</span>
@@ -372,48 +410,57 @@ export default function PreSessionCheck({
   // LOADING AUTH SCREEN
   if (authChecking) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center font-mono">
+      <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A] flex items-center justify-center font-mono">
         <div className="flex items-center gap-3">
-          <span className="w-3 h-3 bg-emerald-400 rounded-full animate-ping" />
-          <span className="text-xs tracking-wider">VALIDATING REGISTERED ACCOUNT...</span>
+          <span className="w-3 h-3 bg-[#10B981] rounded-full animate-ping" />
+          <span className="text-xs font-bold tracking-wider text-[#64748B]">VALIDATING REGISTERED ACCOUNT...</span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white flex flex-col items-center justify-center p-4 font-sans select-none">
+    <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A] flex flex-col items-center justify-center p-4 font-sans select-none">
       
-      <div className="max-w-xl w-full bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl p-6 space-y-5">
+      {/* Brand Header Badge */}
+      <div className="mb-4 flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-[#FFFFFF] border border-[#D1FAE5] shadow-xs">
+        <Shield size={16} className="text-[#10B981] shrink-0" />
+        <span className="text-xs font-mono font-extrabold tracking-widest text-[#0F172A]">TRUEVIEW AI</span>
+        <span className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse shrink-0" />
+      </div>
+
+      <div className="max-w-xl w-full bg-[#FFFFFF] border border-[#E2E8F0] rounded-2xl shadow-[0_10px_30px_rgba(15,23,42,0.08)] p-6 space-y-5">
         
         {/* Header Bar */}
-        <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
+        <div className="flex items-center justify-between pb-4 border-b border-[#E2E8F0]">
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-lg font-extrabold text-white font-mono uppercase tracking-wider">
+              <h1 className="text-lg font-extrabold text-[#0F172A] font-mono uppercase tracking-wider">
                 VERIFY YOUR IDENTITY
               </h1>
-              <span className="px-2 py-0.5 bg-blue-500/20 text-blue-400 border border-blue-500/30 text-[10px] font-mono font-bold rounded">
+              <span className="px-2 py-0.5 bg-[#EFF6FF] text-[#2563EB] border border-[#BFDBFE] text-[10px] font-mono font-bold rounded">
                 {sessionType}
               </span>
             </div>
-            <p className="text-xs text-zinc-400 mt-0.5">
-              Candidate: <strong className="text-white">{candidateName}</strong>
+            <p className="text-xs text-[#64748B] mt-0.5">
+              Candidate: <strong className="text-[#0F172A]">{candidateName}</strong>
             </p>
           </div>
 
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={() => setIsMirrored(!isMirrored)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-xs font-mono text-zinc-200 transition cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#F8FAFC] hover:bg-[#EFF6FF] border border-[#E2E8F0] text-xs font-mono text-[#475569] transition cursor-pointer shadow-xs"
               title="Flip Camera View"
             >
-              <FlipHorizontal size={14} className="text-emerald-400" />
+              <FlipHorizontal size={14} className="text-[#2563EB]" />
               <span>{isMirrored ? 'Mirrored' : 'Normal'}</span>
             </button>
             <button
+              type="button"
               onClick={handleExitClick}
-              className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition cursor-pointer"
+              className="p-1.5 rounded-lg bg-[#F8FAFC] hover:bg-[#EFF6FF] border border-[#E2E8F0] text-[#475569] hover:text-[#0F172A] transition cursor-pointer shadow-xs"
               title="Exit Proctor Room"
             >
               <ArrowLeft size={16} />
@@ -422,7 +469,7 @@ export default function PreSessionCheck({
         </div>
 
         {/* CAMERA PREVIEW STAGE */}
-        <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden border border-zinc-800 shadow-xl flex items-center justify-center">
+        <div className="relative w-full aspect-video bg-[#F1F5F9] rounded-xl overflow-hidden border border-[#CBD5E1] shadow-xs flex items-center justify-center">
           
           <video
             ref={videoPreviewRef}
@@ -433,24 +480,24 @@ export default function PreSessionCheck({
           />
 
           {cameraPermission !== 'granted' && (
-            <div className="flex flex-col items-center justify-center p-6 text-center space-y-2 text-zinc-500">
-              <Camera size={38} className="text-zinc-600 animate-pulse" />
-              <p className="text-xs text-zinc-400">Loading Camera Stream...</p>
+            <div className="flex flex-col items-center justify-center p-6 text-center space-y-2 text-[#64748B]">
+              <Camera size={38} className="text-[#94A3B8] animate-pulse" />
+              <p className="text-xs text-[#64748B] font-medium">Loading Camera Stream...</p>
             </div>
           )}
 
           {/* SPOOF ERROR OVERLAY */}
           {spoofError && (
-            <div className="absolute top-3 left-3 right-3 bg-red-950/95 border border-red-500 text-red-100 p-2.5 rounded-xl shadow-2xl backdrop-blur-md flex items-center gap-2 z-30 animate-bounce">
-              <AlertTriangle size={18} className="text-red-400 shrink-0" />
+            <div className="absolute top-3 left-3 right-3 bg-[#FEF2F2] border border-[#FECACA] text-[#DC2626] p-2.5 rounded-xl shadow-lg backdrop-blur-md flex items-center gap-2 z-30 animate-bounce">
+              <AlertTriangle size={18} className="text-[#DC2626] shrink-0" />
               <span className="text-xs font-mono font-bold leading-tight">{spoofError}</span>
             </div>
           )}
 
           {/* IDENTITY MISMATCH OVERLAY */}
           {identityMismatch && (
-            <div className="absolute top-3 left-3 right-3 bg-rose-950/95 border border-rose-500 text-rose-100 p-2.5 rounded-xl shadow-2xl backdrop-blur-md flex items-center gap-2 z-30 animate-bounce">
-              <AlertCircle size={18} className="text-rose-400 shrink-0" />
+            <div className="absolute top-3 left-3 right-3 bg-[#FEF2F2] border border-[#FECACA] text-[#DC2626] p-2.5 rounded-xl shadow-lg backdrop-blur-md flex items-center gap-2 z-30 animate-bounce">
+              <AlertCircle size={18} className="text-[#DC2626] shrink-0" />
               <span className="text-xs font-mono font-bold leading-tight">
                 IDENTITY MISMATCH: The detected person does not match the registered candidate.
               </span>
@@ -458,91 +505,119 @@ export default function PreSessionCheck({
           )}
 
           {/* Top Status Badges */}
-          <div className="absolute top-3 left-3 bg-black/85 backdrop-blur-md px-3 py-1 rounded-lg text-xs font-mono text-zinc-200 border border-zinc-800 flex items-center gap-2 z-10">
-            <span className={`w-2 h-2 rounded-full ${cameraPermission === 'granted' ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`} />
-            <span>{cameraPermission === 'granted' ? 'CAMERA ACTIVE' : 'NO CAMERA'}</span>
+          <div className="absolute top-3 left-3 bg-[#FFFFFF]/90 backdrop-blur-md px-3 py-1 rounded-lg text-xs font-mono text-[#0F172A] border border-[#E2E8F0] shadow-xs flex items-center gap-2 z-10">
+            <span className={`w-2 h-2 rounded-full ${cameraPermission === 'granted' ? 'bg-[#10B981] animate-pulse' : 'bg-[#EF4444]'}`} />
+            <span className="font-bold text-[11px]">{cameraPermission === 'granted' ? 'CAMERA ACTIVE' : 'NO CAMERA'}</span>
           </div>
         </div>
 
         {/* VERIFICATION STATUS SEQUENCE */}
-        <div className="bg-zinc-950 border border-zinc-800 p-4 rounded-xl space-y-2.5 font-mono text-xs">
+        <div className="bg-[#F8FAFC] border border-[#E2E8F0] p-4 rounded-xl space-y-2.5 font-mono text-xs">
           
           {/* 1. Face Detected */}
           <div className="flex items-center justify-between">
-            <span className="text-zinc-300">Face detected</span>
+            <span className="text-[#334155] font-medium">Face detected</span>
             {faceDetected ? (
-              <span className="text-emerald-400 font-bold">✓</span>
+              <span className="inline-flex items-center gap-1 text-[#059669] font-bold">
+                <CheckCircle2 size={13} className="text-[#10B981]" />
+                <span>Detected ✓</span>
+              </span>
             ) : (
-              <span className="text-zinc-500">...</span>
+              <span className="text-[#D97706] font-bold animate-pulse">Scanning...</span>
             )}
           </div>
 
           {/* 2. Live Person Check */}
           <div className="flex items-center justify-between">
-            <span className="text-zinc-300">Live person check</span>
+            <span className="text-[#334155] font-medium">Live person check</span>
             {livePersonVerified ? (
-              <span className="text-emerald-400 font-bold">✓</span>
+              <span className="inline-flex items-center gap-1 text-[#059669] font-bold">
+                <CheckCircle2 size={13} className="text-[#10B981]" />
+                <span>Live verified ✓</span>
+              </span>
             ) : spoofError ? (
-              <span className="text-red-400 font-bold">FAILED ✕</span>
+              <span className="inline-flex items-center gap-1 text-[#DC2626] font-bold">
+                <AlertCircle size={13} className="text-[#EF4444]" />
+                <span>FAILED ✕</span>
+              </span>
             ) : (
-              <span className="text-amber-400 font-bold animate-pulse">Checking...</span>
+              <span className="text-[#D97706] font-bold animate-pulse">Checking...</span>
             )}
           </div>
 
           {/* 3. Blink Naturally */}
           <div className="flex items-center justify-between">
-            <span className="text-zinc-300">Blink naturally</span>
+            <span className="text-[#334155] font-medium">Blink naturally</span>
             {blinkDetected ? (
-              <span className="text-emerald-400 font-bold">Blink detected ✓</span>
+              <span className="inline-flex items-center gap-1 text-[#059669] font-bold">
+                <CheckCircle2 size={13} className="text-[#10B981]" />
+                <span>Blink detected ✓</span>
+              </span>
             ) : landmarker.status === 'unavailable' ? (
-              <span className="text-amber-400 font-bold">Unavailable – PAD active</span>
+              <span className="text-[#D97706] font-bold">Unavailable – PAD active</span>
             ) : (
-              <span className="text-amber-400 font-bold">Awaiting blink...</span>
+              <span className="text-[#D97706] font-bold animate-pulse">Awaiting blink...</span>
             )}
           </div>
 
           {/* 4. Verifying Face & Identity */}
           <div className="flex items-center justify-between">
-            <span className="text-zinc-300">Verifying face</span>
+            <span className="text-[#334155] font-medium">Verifying face</span>
             {identityMismatch ? (
-              <span className="text-rose-400 font-bold">MISMATCH ✕</span>
+              <span className="inline-flex items-center gap-1 text-[#DC2626] font-bold">
+                <AlertCircle size={13} className="text-[#EF4444]" />
+                <span>MISMATCH ✕</span>
+              </span>
             ) : identityVerified ? (
-              <span className="text-emerald-400 font-bold">Identity verified ✓</span>
+              <span className="inline-flex items-center gap-1 text-[#059669] font-bold">
+                <CheckCircle2 size={13} className="text-[#10B981]" />
+                <span>Identity verified ✓</span>
+              </span>
             ) : identityUnavailable ? (
-              <span className="text-amber-400 font-bold">Unavailable – monitored in-room</span>
+              <span className="text-[#D97706] font-bold">Unavailable – monitored in-room</span>
             ) : (
-              <span className="text-zinc-500">...</span>
+              <span className="text-[#D97706] font-bold animate-pulse">Comparing...</span>
             )}
           </div>
 
           {/* 5. Voice Profile */}
           <div className="flex items-center justify-between">
-            <span className="text-zinc-300">Voice profile</span>
+            <span className="text-[#334155] font-medium">Voice profile</span>
             {voiceProfileReady ? (
-              <span className="text-emerald-400 font-bold">Registered ✓</span>
+              <span className="inline-flex items-center gap-1 text-[#059669] font-bold">
+                <CheckCircle2 size={13} className="text-[#10B981]" />
+                <span>Registered ✓</span>
+              </span>
             ) : (
-              <span className="text-zinc-400 font-bold">Not enrolled (Optional)</span>
+              <span className="text-[#64748B] font-bold">Not enrolled (Optional)</span>
             )}
           </div>
 
-          {/* 6. Network */}
+          {/* 6. Network Connection */}
           <div className="flex items-center justify-between">
-            <span className="text-zinc-300">Network connection</span>
+            <span className="text-[#334155] font-medium">Network connection</span>
             {networkOnline ? (
-              <span className="text-emerald-400 font-bold">Online ✓</span>
+              <span className="inline-flex items-center gap-1 text-[#059669] font-bold">
+                <CheckCircle2 size={13} className="text-[#10B981]" />
+                <span>Online ✓</span>
+              </span>
             ) : (
-              <span className="text-red-400 font-bold">Offline ✕</span>
+              <span className="inline-flex items-center gap-1 text-[#DC2626] font-bold">
+                <AlertCircle size={13} className="text-[#EF4444]" />
+                <span>Offline ✕</span>
+              </span>
             )}
           </div>
 
         </div>
 
         {/* Action Controls: EXIT, RESET, ENTER PROCTOR ROOM */}
-        <div className="pt-2 flex items-center justify-between gap-3 border-t border-zinc-800">
+        <div className="pt-2 flex items-center justify-between gap-3 border-t border-[#E2E8F0]">
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={handleExitClick}
-              className="px-3.5 py-2.5 rounded-xl border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-mono font-bold transition flex items-center gap-1.5 cursor-pointer"
+              className="px-3.5 py-2.5 rounded-xl border border-[#CBD5E1] bg-[#FFFFFF] hover:bg-[#F1F5F9] text-[#475569] text-xs font-mono font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
               title="Exit to Virtual Rooms"
             >
               <ArrowLeft size={13} />
@@ -550,8 +625,9 @@ export default function PreSessionCheck({
             </button>
 
             <button
+              type="button"
               onClick={runCheckSequence}
-              className="px-3.5 py-2.5 rounded-xl border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 text-xs font-mono font-bold transition flex items-center gap-1.5 cursor-pointer"
+              className="px-3.5 py-2.5 rounded-xl border border-[#CBD5E1] bg-[#FFFFFF] hover:bg-[#EFF6FF] text-[#475569] text-xs font-mono font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
               title="Restart camera & checks"
             >
               <RefreshCw size={13} />
@@ -560,19 +636,26 @@ export default function PreSessionCheck({
           </div>
 
           <button
+            type="button"
             onClick={handleEnterProctorRoom}
             disabled={!isReadyToEnter}
             className={`px-5 py-2.5 rounded-xl text-xs font-mono font-extrabold tracking-wider transition flex items-center gap-2 ${
               isReadyToEnter
-                ? 'bg-white hover:bg-zinc-200 text-black cursor-pointer shadow-lg'
-                : 'bg-zinc-800 text-zinc-500 cursor-not-allowed border border-zinc-700'
+                ? 'bg-[#10B981] hover:bg-[#059669] text-[#FFFFFF] cursor-pointer shadow-md'
+                : 'bg-[#E2E8F0] text-[#94A3B8] cursor-not-allowed border border-[#CBD5E1]'
             }`}
           >
-            <span>ENTER PROCTOR ROOM</span>
+            <span>{sessionType === 'INTERVIEW' ? 'ENTER INTERVIEW' : 'ENTER EXAMINATION'}</span>
             <ArrowRight size={14} />
           </button>
         </div>
 
+      </div>
+
+      {/* Footer Security Badge */}
+      <div className="mt-5 flex items-center gap-2 text-xs text-[#64748B] font-medium text-center">
+        <CheckCircle2 size={14} className="text-[#10B981] shrink-0" />
+        <span>End-to-End Multimodal Trust Verification & Monitoring</span>
       </div>
 
     </div>

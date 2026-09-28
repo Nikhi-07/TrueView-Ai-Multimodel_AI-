@@ -69,25 +69,31 @@ class EventConfirmationStateMachine:
                 "evidence": evt["evidence"],
             }
 
+        grace_period_sec = 1.2
+
         if raw_active:
+            evt["last_seen_ts"] = now
             if evt["state"] == "RESOLVED":
                 evt["state"] = "POTENTIAL"
                 evt["start_ts"] = now
                 evt["consecutive_count"] = 1
                 evt["confirmed_ts"] = None
+                evt["resolved_ts"] = None
             else:
                 evt["consecutive_count"] += 1
 
-            dur = round(now - (evt["start_ts"] or now), 1)
+            dur = round(now - (evt["start_ts"] or now), 2)
             evt["duration"] = dur
             evt["confidence"] = confidence
             evt["evidence"] = evidence
 
-            # State Transitions
+            # State Transitions:
+            # 2 consecutive frames transition POTENTIAL -> OBSERVING
             if evt["state"] == "POTENTIAL" and evt["consecutive_count"] >= 2:
                 evt["state"] = "OBSERVING"
 
-            if evt["state"] == "OBSERVING" and dur >= required_duration_sec:
+            # Reaching duration threshold or sufficient observations confirms event
+            if evt["state"] == "OBSERVING" and (dur >= required_duration_sec or evt["consecutive_count"] >= 3):
                 if evt["state"] != "CONFIRMED":
                     evt["confirmed_ts"] = now
                 evt["state"] = "CONFIRMED"
@@ -96,13 +102,20 @@ class EventConfirmationStateMachine:
                 evt["state"] = "ACTIVE"
         else:
             if evt["state"] in ("CONFIRMED", "ACTIVE"):
-                evt["state"] = "RESOLVED"
-                evt["resolved_ts"] = now
+                last_seen = evt.get("last_seen_ts") or evt.get("start_ts") or now
+                if now - last_seen < grace_period_sec:
+                    # Maintain confirmed/active state during grace period to prevent flicker
+                    pass
+                else:
+                    evt["state"] = "RESOLVED"
+                    evt["resolved_ts"] = now
+                    evt["duration"] = 0.0
+                    evt["consecutive_count"] = 0
             elif evt["state"] in ("POTENTIAL", "OBSERVING"):
                 evt["state"] = "RESOLVED"
                 evt["resolved_ts"] = now
-            evt["duration"] = 0.0
-            evt["consecutive_count"] = 0
+                evt["duration"] = 0.0
+                evt["consecutive_count"] = 0
 
         is_confirmed = evt["state"] in ("CONFIRMED", "ACTIVE")
 

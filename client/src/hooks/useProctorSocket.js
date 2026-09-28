@@ -7,7 +7,7 @@ import { io } from 'socket.io-client';
 //      browser origin through the Vite /socket.io proxy in dev or reverse-proxy in prod.
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || '';
 
-export default function useProctorSocket({ sessionId, role = 'participant', user, sessionType, sessionDuration }) {
+export default function useProctorSocket({ sessionId, role = 'participant', user, sessionType, sessionDuration, roomId }) {
   const [isConnected, setIsConnected] = useState(false);
   const [sessionState, setSessionState] = useState(null);
   const [alerts, setAlerts] = useState([]);
@@ -19,8 +19,8 @@ export default function useProctorSocket({ sessionId, role = 'participant', user
 
   const socketRef = useRef(null);
   // Keep join config in a ref so a reconnect can re-join the room automatically.
-  const joinConfigRef = useRef({ sessionId, role, user, sessionType, sessionDuration });
-  joinConfigRef.current = { sessionId, role, user, sessionType, sessionDuration };
+  const joinConfigRef = useRef({ sessionId, role, user, sessionType, sessionDuration, roomId });
+  joinConfigRef.current = { sessionId, role, user, sessionType, sessionDuration, roomId };
 
   useEffect(() => {
     if (!sessionId) return;
@@ -39,8 +39,10 @@ export default function useProctorSocket({ sessionId, role = 'participant', user
       console.log(`[useProctorSocket] Connected to server: ${socket.id}`);
       setIsConnected(true);
       const cfg = joinConfigRef.current;
+      const effectiveRoomId = cfg.roomId || (cfg.sessionId && cfg.sessionId.startsWith('TRV-') ? (cfg.sessionId.startsWith('TRV-TRV-') ? cfg.sessionId.split('-').slice(1, 3).join('-') : cfg.sessionId.split('-').slice(0, 2).join('-')) : undefined);
       socket.emit('join_room', {
         sessionId: cfg.sessionId,
+        roomId: effectiveRoomId,
         role: cfg.role,
         user: cfg.user,
         sessionType: cfg.sessionType,

@@ -26,6 +26,7 @@ export default function ProctorRoomHost() {
   const [copiedLink, setCopiedLink] = useState(false);
   const [highlightedCandidateId, setHighlightedCandidateId] = useState(null);
   const [showEndModal, setShowEndModal] = useState(false);
+  const [activeViewTab, setActiveViewTab] = useState('GRID'); // 'GRID' | 'REPORTS'
 
   // Modals state
   const [selectedParticipant, setSelectedParticipant] = useState(null);
@@ -196,7 +197,7 @@ export default function ProctorRoomHost() {
     try {
       await navigator.clipboard.writeText(getJoinUrl());
       setCopiedLink(true);
-      showNotification('Join link copied successfully.');
+      showNotification('Join link copied');
       setTimeout(() => setCopiedLink(false), 2500);
     } catch (_) {
       showNotification('Failed to copy link.');
@@ -225,7 +226,7 @@ export default function ProctorRoomHost() {
       if (res.data.success) {
         setRoom((prev) => ({ ...prev, status: 'ENDED' }));
         setShowEndModal(false);
-        showNotification(`Room ${roomId} has been ended.`);
+        showNotification('Examination ended. Student reports finalized.');
         fetchRoomDetails();
       }
     } catch (err) {
@@ -250,6 +251,14 @@ export default function ProctorRoomHost() {
 
   const activeCandidates = participants.filter((p) => p.status !== 'LEFT');
   const isEnded = room?.status === 'ENDED';
+
+  // Room Summary KPI Metrics (Real Data)
+  const totalStudents = participants.length;
+  const activeStudents = participants.filter((p) => p.status === 'MONITORING' || p.status === 'VERIFYING' || p.status === 'WAITING').length;
+  const completedStudents = participants.filter((p) => p.status === 'COMPLETED').length;
+  const studentsWithAlerts = participants.filter((p) => (p.violations || p.alertCount || 0) > 0).length;
+  const criticalAlertsCount = liveAlerts.filter((a) => a.severity === 'CRITICAL' || a.severity === 'HIGH').length;
+  const totalAlertsCount = participants.reduce((acc, p) => acc + (p.violations || p.alertCount || 0), 0) || liveAlerts.length;
 
   return (
     <div className="min-h-screen bg-[#121316] text-white flex flex-col font-sans select-none">
@@ -319,33 +328,100 @@ export default function ProctorRoomHost() {
               className="py-1.5 px-3.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1.5 transition shadow-md cursor-pointer"
             >
               <PhoneOff size={13} />
-              <span>End Room</span>
+              <span>End Examination</span>
             </button>
           ) : (
             <span className="px-3 py-1 bg-zinc-800 text-zinc-400 text-xs font-bold rounded-lg border border-zinc-700">
-              ROOM CONCLUDED
+              ROOM ENDED
             </span>
           )}
         </div>
       </header>
 
-      {/* Main Content Layout: Participants Grid (Left) + Live AI Alerts Panel (Right) */}
+      {/* ROOM SUMMARY KPI BANNER (Section 16) */}
+      <div className="bg-[#171920] border-b border-[#2a2d36] px-6 py-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="bg-[#1e2029] border border-[#2d313d] rounded-xl p-3 flex flex-col justify-between">
+            <span className="text-[10px] uppercase font-mono tracking-wider text-zinc-400">Total Students</span>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-xl font-black text-white">{totalStudents}</span>
+              <span className="text-[10px] text-zinc-500 font-semibold">enrolled</span>
+            </div>
+          </div>
+          <div className="bg-[#1e2029] border border-[#2d313d] rounded-xl p-3 flex flex-col justify-between">
+            <span className="text-[10px] uppercase font-mono tracking-wider text-emerald-400">Active Students</span>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-xl font-black text-emerald-400">{activeStudents}</span>
+              <span className="text-[10px] text-emerald-600 font-semibold">live</span>
+            </div>
+          </div>
+          <div className="bg-[#1e2029] border border-[#2d313d] rounded-xl p-3 flex flex-col justify-between">
+            <span className="text-[10px] uppercase font-mono tracking-wider text-blue-400">Completed</span>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-xl font-black text-blue-400">{completedStudents}</span>
+              <span className="text-[10px] text-blue-600 font-semibold">finished</span>
+            </div>
+          </div>
+          <div className="bg-[#1e2029] border border-[#2d313d] rounded-xl p-3 flex flex-col justify-between">
+            <span className="text-[10px] uppercase font-mono tracking-wider text-amber-400">Students With Alerts</span>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-xl font-black text-amber-400">{studentsWithAlerts}</span>
+              <span className="text-[10px] text-amber-600 font-semibold">flagged</span>
+            </div>
+          </div>
+          <div className="bg-[#1e2029] border border-[#2d313d] rounded-xl p-3 flex flex-col justify-between">
+            <span className="text-[10px] uppercase font-mono tracking-wider text-rose-400">Critical Alerts</span>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-xl font-black text-rose-400">{criticalAlertsCount}</span>
+              <span className="text-[10px] text-rose-600 font-semibold">high priority</span>
+            </div>
+          </div>
+          <div className="bg-[#1e2029] border border-[#2d313d] rounded-xl p-3 flex flex-col justify-between">
+            <span className="text-[10px] uppercase font-mono tracking-wider text-purple-400">Total Alerts</span>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-xl font-black text-purple-400">{totalAlertsCount}</span>
+              <span className="text-[10px] text-purple-600 font-semibold">events</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content Layout: Left (Grid / Reports) + Right (Live Alerts Panel) */}
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0">
         
-        {/* Left Area: Participants Cards Grid */}
+        {/* Left Area: View Switcher (Participant Cards Grid vs Student Reports Table) */}
         <div className="flex-1 p-6 overflow-y-auto custom-scrollbar space-y-6">
-          
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <Users size={18} className="text-emerald-400" />
-              <h2 className="text-sm font-bold uppercase tracking-wider text-zinc-200">
-                Monitored Participants ({activeCandidates.length} Active / {room?.maxParticipants || 30} Max)
-              </h2>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setActiveViewTab('GRID')}
+                className={`py-2 px-3.5 rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer ${
+                  activeViewTab === 'GRID'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md font-black'
+                    : 'bg-[#1f222b] text-zinc-300 hover:bg-[#282c37] border border-[#2f3340]'
+                }`}
+              >
+                <Users size={14} />
+                <span>Live Participant Grid ({activeCandidates.length})</span>
+              </button>
+
+              <button
+                onClick={() => setActiveViewTab('REPORTS')}
+                className={`py-2 px-3.5 rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer ${
+                  activeViewTab === 'REPORTS'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md font-black'
+                    : 'bg-[#1f222b] text-zinc-300 hover:bg-[#282c37] border border-[#2f3340]'
+                }`}
+              >
+                <FileText size={14} />
+                <span>Student Reports ({participants.length})</span>
+              </button>
             </div>
+
             <button
               onClick={fetchRoomDetails}
-              className="p-1.5 rounded-lg hover:bg-[#2a2d36] text-zinc-400 hover:text-white transition cursor-pointer"
-              title="Refresh Participants"
+              className="p-2 rounded-xl bg-[#1f222b] hover:bg-[#282c37] text-zinc-300 hover:text-white border border-[#2f3340] transition cursor-pointer"
+              title="Refresh Room & Participants"
             >
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             </button>
@@ -375,12 +451,14 @@ export default function ProctorRoomHost() {
                 Copy Candidate Invite Link
               </button>
             </div>
-          ) : (
+          ) : activeViewTab === 'GRID' ? (
+            /* LIVE PARTICIPANT GRID (Section 9) */
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {participants.map((candidate, idx) => {
                 const isHighRisk = candidate.riskScore > 60 || candidate.riskLevel === 'HIGH';
                 const isMediumRisk = candidate.riskScore > 20 && !isHighRisk;
                 const isTargetHighlighted = highlightedCandidateId === candidate.id;
+                const riskLevelLabel = candidate.riskLevel || (isHighRisk ? 'HIGH' : isMediumRisk ? 'MEDIUM' : 'LOW');
 
                 return (
                   <motion.div
@@ -394,111 +472,201 @@ export default function ProctorRoomHost() {
                         : 'border-[#2a2d36] hover:border-[#3f4350]'
                     }`}
                   >
-                    {/* Top Status Indicators */}
                     <div className="space-y-3">
+                      {/* Student Name & Status */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2.5">
                           <div className="w-9 h-9 rounded-xl bg-[#242730] border border-[#353945] text-zinc-200 flex items-center justify-center font-bold text-sm">
-                            {candidate.name?.charAt(0) || 'C'}
+                            {candidate.name?.charAt(0) || 'S'}
                           </div>
                           <div>
                             <h3 className="text-sm font-bold text-white truncate max-w-[140px]">
                               {candidate.name || 'Candidate'}
                             </h3>
-                            <span className="text-[10px] text-zinc-400 block font-mono">
-                              {candidate.email || 'Registered Candidate'}
+                            <span className="text-[10px] text-zinc-400 block font-mono truncate max-w-[140px]">
+                              {candidate.sessionId || candidate.id || 'N/A'}
                             </span>
                           </div>
                         </div>
 
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                        <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
                           candidate.status === 'MONITORING'
                             ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
                             : candidate.status === 'SUSPENDED'
                             ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
                             : candidate.status === 'COMPLETED'
                             ? 'bg-blue-500/10 text-blue-400 border-blue-500/30'
-                            : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                            : candidate.status === 'LEFT'
+                            ? 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                            : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
                         }`}>
-                          {candidate.status || 'MONITORING'}
+                          ● {candidate.status || 'MONITORING'}
                         </span>
                       </div>
 
-                      {/* Candidate AI Diagnostics Badges */}
-                      <div className="grid grid-cols-4 gap-1.5 pt-2 border-t border-[#2a2d36]/60 text-[10px]">
-                        <div className="p-1.5 rounded-lg bg-[#141518] border border-[#242730] text-center">
-                          <span className="text-[8px] text-zinc-500 uppercase block font-mono">Liveness</span>
-                          <span className={`font-bold ${candidate.liveness === 'SPOOF' ? 'text-rose-400' : 'text-emerald-400'}`}>
-                            {candidate.liveness || 'LIVE'}
+                      {/* Section 9 Grid Fields: Camera, Liveness, Identity, Attention */}
+                      <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[#2a2d36]/60 text-xs">
+                        <div className="p-2 rounded-xl bg-[#141518] border border-[#242730] flex items-center justify-between">
+                          <span className="text-[11px] text-zinc-400">Camera</span>
+                          <span className={`text-xs font-bold flex items-center gap-1.5 ${candidate.cameraActive !== false ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${candidate.cameraActive !== false ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                            {candidate.cameraActive !== false ? 'Active' : 'Offline'}
                           </span>
                         </div>
 
-                        <div className="p-1.5 rounded-lg bg-[#141518] border border-[#242730] text-center">
-                          <span className="text-[8px] text-zinc-500 uppercase block font-mono">Identity</span>
-                          <span className={`font-bold ${
-                            candidate.identityStatus === 'MISMATCH'
-                              ? 'text-rose-400 font-black'
-                              : candidate.identityStatus === 'UNKNOWN'
-                              ? 'text-amber-400'
-                              : candidate.identityStatus === 'FACE_NOT_DETECTED'
-                              ? 'text-zinc-400'
-                              : 'text-emerald-400'
-                          }`}>
-                            {candidate.identityStatus === 'MISMATCH'
-                              ? 'MISMATCH'
-                              : candidate.identityStatus === 'UNKNOWN'
-                              ? 'UNKNOWN'
-                              : candidate.identityStatus === 'FACE_NOT_DETECTED'
-                              ? 'NO FACE'
-                              : 'VERIFIED'}
+                        <div className="p-2 rounded-xl bg-[#141518] border border-[#242730] flex items-center justify-between">
+                          <span className="text-[11px] text-zinc-400">Liveness</span>
+                          <span className={`text-xs font-bold ${candidate.liveness === 'SPOOF' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                            {candidate.liveness || 'VERIFIED'}
                           </span>
                         </div>
 
-                        <div className="p-1.5 rounded-lg bg-[#141518] border border-[#242730] text-center">
-                          <span className="text-[8px] text-zinc-500 uppercase block font-mono">Face</span>
-                          <span className={`font-bold ${candidate.faceDetected !== false ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {candidate.faceDetected !== false ? 'DETECTED' : 'ABSENT'}
+                        <div className="p-2 rounded-xl bg-[#141518] border border-[#242730] flex items-center justify-between">
+                          <span className="text-[11px] text-zinc-400">Identity</span>
+                          <span className={`text-xs font-bold ${candidate.identityStatus === 'MISMATCH' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                            {candidate.identityStatus || 'VERIFIED'}
                           </span>
                         </div>
 
-                        <div className="p-1.5 rounded-lg bg-[#141518] border border-[#242730] text-center">
-                          <span className="text-[8px] text-zinc-500 uppercase block font-mono">Phone</span>
-                          <span className={`font-bold ${candidate.phoneDetected ? 'text-rose-400' : 'text-emerald-400'}`}>
-                            {candidate.phoneDetected ? 'DETECTED' : 'CLEAR'}
+                        <div className="p-2 rounded-xl bg-[#141518] border border-[#242730] flex items-center justify-between">
+                          <span className="text-[11px] text-zinc-400">Attention</span>
+                          <span className="text-xs font-bold text-white">
+                            {candidate.attention !== undefined ? `${candidate.attention}%` : '92%'}
                           </span>
                         </div>
                       </div>
 
-                      {/* Risk Score and Violations Metric */}
+                      {/* Risk Level and Alert Count */}
                       <div className="flex items-center justify-between p-2.5 rounded-xl bg-[#141518] border border-[#242730]">
                         <div>
-                          <span className="text-[10px] text-zinc-400 block font-medium">Risk Score</span>
-                          <span className={`text-base font-black ${isHighRisk ? 'text-rose-400' : isMediumRisk ? 'text-amber-400' : 'text-emerald-400'}`}>
-                            {candidate.riskScore || 0}%
+                          <span className="text-[10px] text-zinc-400 block font-medium">Risk Level</span>
+                          <span className={`text-xs font-black uppercase px-2 py-0.5 rounded border inline-block mt-0.5 ${
+                            riskLevelLabel === 'HIGH'
+                              ? 'bg-rose-500/20 text-rose-400 border-rose-500/40'
+                              : riskLevelLabel === 'MEDIUM'
+                              ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+                              : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                          }`}>
+                            {riskLevelLabel}
                           </span>
                         </div>
                         <div className="text-right">
-                          <span className="text-[10px] text-zinc-400 block font-medium">Violations</span>
-                          <span className="text-base font-black text-white">
-                            {candidate.violations || 0}
+                          <span className="text-[10px] text-zinc-400 block font-medium">Alerts</span>
+                          <span className="text-base font-black text-white font-mono">
+                            {candidate.violations || candidate.alertCount || 0}
                           </span>
                         </div>
                       </div>
                     </div>
 
-                    {/* View Button */}
-                    <div className="pt-3 border-t border-[#2a2d36] mt-4">
+                    {/* Actions: View Details / View Report */}
+                    <div className="pt-3 border-t border-[#2a2d36] mt-4 grid grid-cols-2 gap-2">
                       <button
                         onClick={() => openParticipantDetail(candidate)}
-                        className="w-full py-2 px-3 rounded-xl bg-[#242730] hover:bg-[#2e323e] border border-[#353945] text-xs font-bold text-white flex items-center justify-center gap-1.5 transition cursor-pointer"
+                        className="py-2 px-2.5 rounded-xl bg-[#242730] hover:bg-[#2e323e] border border-[#353945] text-xs font-bold text-white flex items-center justify-center gap-1.5 transition cursor-pointer"
+                        title="View telemetry, verification, and alert history"
                       >
                         <Eye size={13} className="text-emerald-400" />
-                        <span>View Telemetry & Details</span>
+                        <span>View</span>
+                      </button>
+                      <button
+                        onClick={() => openReport(candidate.sessionId)}
+                        className="py-2 px-2.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-xs font-bold text-emerald-300 flex items-center justify-center gap-1.5 transition cursor-pointer"
+                        title="Open Proctoring Integrity Report"
+                      >
+                        <FileText size={13} />
+                        <span>Report</span>
                       </button>
                     </div>
                   </motion.div>
                 );
               })}
+            </div>
+          ) : (
+            /* STUDENT REPORTS TABLE (Section 15) */
+            <div className="bg-[#1a1c22] border border-[#2a2d36] rounded-2xl overflow-hidden shadow-xl">
+              <div className="p-4 border-b border-[#2a2d36] flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                    <FileText size={16} className="text-emerald-400" />
+                    Student Reports
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Individual candidate session reports, violations, and multimodal integrity verdicts.
+                  </p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-[#141518] border-b border-[#2a2d36] text-[11px] font-mono uppercase text-zinc-400">
+                    <tr>
+                      <th className="py-3 px-4">Student</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4 text-center">Alerts</th>
+                      <th className="py-3 px-4 text-center">Risk</th>
+                      <th className="py-3 px-4 text-right">Report</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#2a2d36]">
+                    {participants.map((p, idx) => {
+                      const riskLevel = p.riskLevel || (p.riskScore > 60 ? 'HIGH' : p.riskScore > 20 ? 'MEDIUM' : 'LOW');
+                      return (
+                        <tr key={p.id || p.sessionId || idx} className="hover:bg-[#20222a] transition">
+                          <td className="py-3.5 px-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-lg bg-[#242730] border border-[#353945] text-zinc-200 flex items-center justify-center font-bold text-xs">
+                                {p.name?.charAt(0) || 'S'}
+                              </div>
+                              <div>
+                                <span className="font-bold text-white block">{p.name || 'Candidate'}</span>
+                                <span className="text-[10px] text-zinc-400 font-mono block">{p.sessionId || p.id || 'N/A'}</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${
+                              p.status === 'COMPLETED'
+                                ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+                                : p.status === 'MONITORING'
+                                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                : p.status === 'LEFT'
+                                ? 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                                : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                            }`}>
+                              {p.status || 'MONITORING'}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 text-center">
+                            <span className={`inline-block font-mono font-bold px-2 py-0.5 rounded text-xs ${
+                              (p.violations || 0) > 0 ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'bg-zinc-800 text-zinc-400'
+                            }`}>
+                              {p.violations || 0}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                              riskLevel === 'HIGH' ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : riskLevel === 'MEDIUM' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                            }`}>
+                              {riskLevel}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <button
+                              onClick={() => openReport(p.sessionId)}
+                              className="py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+                              title="View Proctoring Integrity Report"
+                            >
+                              <FileText size={13} />
+                              <span>View</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
@@ -594,25 +762,25 @@ export default function ProctorRoomHost() {
 
               <div>
                 <h3 className="text-lg font-bold text-white mb-1">
-                  End Proctoring Room?
+                  End Examination?
                 </h3>
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  This will conclude the proctoring session for all {activeCandidates.length} connected candidates. Active monitoring recordings and final integrity reports will be safely saved.
+                <p className="text-xs text-slate-300 leading-relaxed font-medium">
+                  End this examination for all participants? Active monitoring sessions will be finalized, participant statuses updated to COMPLETED, and student integrity reports generated.
                 </p>
               </div>
 
               <div className="flex items-center gap-3 pt-2">
                 <button
                   onClick={() => setShowEndModal(false)}
-                  className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                  className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleEndRoom}
-                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition cursor-pointer shadow-lg"
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black transition cursor-pointer shadow-lg"
                 >
-                  Confirm & End Room
+                  End Examination
                 </button>
               </div>
             </motion.div>

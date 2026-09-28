@@ -109,13 +109,26 @@ class SharedFacePipeline:
             try:
                 eye_data = gaze_svc.eye_extractor.extract(landmarks)
                 if eye_data.get("success"):
-                    iris_data = gaze_svc.iris_detector.detect_both(eye_data["left_eye"], eye_data["right_eye"], frame=frame)
-                    gaze_res = gaze_svc.gaze_estimator.estimate(iris_data["averaged_position"])
-                    out["gaze"] = {
-                        "direction": gaze_res.get("gaze_direction", "center"),
-                        "confidence": gaze_res.get("confidence", 0.85),
-                        "iris_position": iris_data.get("averaged_position", {}),
-                    }
+                    avg_ear = eye_data.get("average_ear", 0.30)
+                    left_ear = eye_data.get("left_ear", 0.30)
+                    right_ear = eye_data.get("right_ear", 0.30)
+                    if left_ear <= 0.21 and right_ear <= 0.21:
+                        out["gaze"] = {
+                            "direction": "unknown",
+                            "confidence": 0.0,
+                            "eyes_closed": True,
+                            "ear": avg_ear,
+                        }
+                    else:
+                        iris_data = gaze_svc.iris_detector.detect_both(eye_data["left_eye"], eye_data["right_eye"], frame=frame)
+                        gaze_res = gaze_svc.gaze_estimator.estimate(iris_data["averaged_position"])
+                        out["gaze"] = {
+                            "direction": gaze_res.get("gaze_direction", "center"),
+                            "confidence": gaze_res.get("confidence", 0.85),
+                            "iris_position": iris_data.get("averaged_position", {}),
+                            "eyes_closed": False,
+                            "ear": avg_ear,
+                        }
             except Exception as e:
                 print(f"[SharedFacePipeline] Gaze tracking exception: {e}")
 

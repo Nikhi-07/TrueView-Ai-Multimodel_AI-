@@ -9,6 +9,7 @@ import useParticipantBroadcast from '../../hooks/useParticipantBroadcast';
 import api from '../../services/api';
 import { WAVAudioRecorder } from '../../utils/wavRecorder';
 import { evaluateEventSeverity } from '../../utils/sessionPolicies';
+import toast from 'react-hot-toast';
 
 export default function ParticipantProctorRoom({
   room,
@@ -38,6 +39,7 @@ export default function ParticipantProctorRoom({
     cameraStatus,
     microphoneStatus,
     startStream,
+    stopStream,
   } = useControlledMediaStream({
     initialStream,
     autoStart: true,
@@ -67,7 +69,8 @@ export default function ParticipantProctorRoom({
     sessionId,
     role: 'participant',
     user,
-    sessionType
+    sessionType,
+    roomId: room?.roomId || room?.id
   });
 
   // Timer & AI Telemetry State
@@ -403,8 +406,11 @@ export default function ParticipantProctorRoom({
               // NEXT episode of the same event type can alert again. Without this,
               // only the FIRST gaze/phone episode would ever reach the server —
               // the second OFFSCREEN_GLANCE after GAZE_CLEARED would be skipped.
-              if (evtState === 'RESOLVED') emittedEventStatesRef.current = {};
-              emittedEventStatesRef.current[evt.type] = evtState;
+              if (evtState === 'RESOLVED') {
+                delete emittedEventStatesRef.current[evt.type];
+              } else {
+                emittedEventStatesRef.current[evt.type] = evtState;
+              }
 
               const severity = evaluateEventSeverity(evt.type, sessionType);
               emitAIEvent({
@@ -508,7 +514,33 @@ export default function ParticipantProctorRoom({
           </div>
 
           <button
-            onClick={onExit}
+            onClick={() => {
+              stopStream();
+              toast.success(
+                () => (
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-bold text-xs text-white">Camera turned off</span>
+                    <span className="text-[11px] text-zinc-300">
+                      Camera has been disabled after leaving the monitoring room.
+                    </span>
+                  </div>
+                ),
+                {
+                  id: 'camera-disabled-security-toast',
+                  duration: 4500,
+                  icon: '🔒',
+                  style: {
+                    background: '#18181b',
+                    color: '#f4f4f5',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: '0.75rem',
+                    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5)',
+                    padding: '10px 14px',
+                  }
+                }
+              );
+              if (onExit) onExit();
+            }}
             className="text-xs font-mono font-bold px-4 py-1.5 rounded-xl border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-white transition cursor-pointer shadow-sm"
           >
             EXIT

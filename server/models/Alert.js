@@ -10,6 +10,21 @@ const alertSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    roomId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    hostId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    studentId: {
+      type: String,
+      default: null,
+      index: true,
+    },
     participantId: {
       type: String,
       default: 'cand_01',

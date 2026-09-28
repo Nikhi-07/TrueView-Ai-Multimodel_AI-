@@ -31,8 +31,39 @@ const sessionSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['WAITING', 'DEVICE_CHECK', 'READY', 'LIVE', 'WARNING', 'SUSPENDING', 'SUSPENDED', 'RESUMING', 'COMPLETED', 'EXITED', 'FAILED', 'ACTIVE'],
+      enum: ['WAITING', 'DEVICE_CHECK', 'READY', 'LIVE', 'WARNING', 'SUSPENDING', 'SUSPENDED', 'RESUMING', 'COMPLETED', 'EXITED', 'FAILED', 'ACTIVE', 'TERMINATED'],
       default: 'READY',
+    },
+    tabSwitchCount: {
+      type: Number,
+      default: 0,
+    },
+    maxTabSwitches: {
+      type: Number,
+      default: 3,
+    },
+    tabSwitchStatus: {
+      type: String,
+      enum: ['NORMAL', 'WARNING', 'FINAL_WARNING', 'TERMINATED'],
+      default: 'NORMAL',
+    },
+    tabSwitchEvents: [
+      {
+        timestamp: { type: Date, default: Date.now },
+        count: { type: Number, default: 0 },
+        maxAllowed: { type: Number, default: 3 },
+        severity: { type: String, default: 'MEDIUM' },
+        eventType: { type: String, default: 'TAB_SWITCH_DETECTED' },
+        message: { type: String, default: '' },
+      }
+    ],
+    terminationReason: {
+      type: String,
+      default: null,
+    },
+    terminatedAt: {
+      type: Date,
+      default: null,
     },
     cameraStatus: {
       type: String,
@@ -101,6 +132,18 @@ const sessionSchema = new mongoose.Schema(
       default: null,
     },
     roomTitle: {
+      type: String,
+      default: null,
+    },
+    hostId: {
+      type: String,
+      default: null,
+    },
+    hostName: {
+      type: String,
+      default: null,
+    },
+    hostEmail: {
       type: String,
       default: null,
     },

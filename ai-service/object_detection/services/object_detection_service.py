@@ -72,13 +72,15 @@ class ObjectDetectionService:
             "objects_detected": len(tracked_detections),
             "detections": tracked_detections,
             "summary": env_summary,
+            "events": env_summary.get("events", []),
             "annotated_image": annotated_image_b64,
             "processing_time_ms": processing_time_ms
         }
         
     def reset_session(self):
-        """Reset internal tracking histories."""
+        """Reset internal tracking and state-machine histories."""
         self.tracker.reset()
+        self.monitor.reset()
         
     @staticmethod
     def _decode_image(image_data: str) -> np.ndarray | None:

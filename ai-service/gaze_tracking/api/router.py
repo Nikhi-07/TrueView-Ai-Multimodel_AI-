@@ -8,7 +8,8 @@ Endpoints:
     POST /reset-session       – Reset attention tracking for a new session
 """
 
-from fastapi import APIRouter, HTTPException
+from typing import Optional
+from fastapi import APIRouter
 from pydantic import BaseModel
 from ..services.gaze_service import EyeGazeService
 
@@ -18,8 +19,9 @@ gaze_service = EyeGazeService()
 
 class EyeGazeRequest(BaseModel):
     """Request schema for the eye gaze processing endpoint."""
-    image: str                    # Base64-encoded camera frame
-    draw_overlay: bool = True     # Whether to return annotated image
+    image: str                                  # Base64-encoded camera frame
+    draw_overlay: bool = True                   # Whether to return annotated image
+    eye_metrics: Optional[dict] = None          # Optional client-side landmarks/EAR/blendshapes
 
 
 class ResetSessionRequest(BaseModel):
@@ -35,12 +37,18 @@ async def process_eye_gaze(request: EyeGazeRequest):
     Input:
         - image: Base64-encoded JPEG frame from the webcam
         - draw_overlay: Whether to draw gaze visualizations on the frame
+        - eye_metrics: Optional real-time client facial landmarks/EAR/blendshapes
 
     Output:
-        - gaze_direction: "center" | "left" | "right" | "up" | "down"
-        - attention_status: "focused" | "distracted" | "looking_away"
+        - eye_status: "OPEN" | "CLOSED" | "BLINKING" | "PARTIALLY_CLOSED" | "UNKNOWN"
+        - gaze_direction: "center" | "left" | "right" | "up" | "down" | "unknown"
+        - focus_state: "FOCUSED" | "EYES_CLOSED" | "BLINKING" | "OFFSCREEN" | "DISTRACTED" | "FACE_NOT_DETECTED"
+        - attention_status: "focused" | "blinking" | "eyes_closed" | "distracted" | "looking_away" | "face_not_detected"
         - attention_score: 0-100 (percentage of recent frames looking at screen)
-        - confidence: 0.0-1.0 (gaze detection confidence)
+        - left_ear: float
+        - right_ear: float
+        - ear: float
+        - confidence: 0.0-1.0
         - focus_duration_seconds: cumulative focus time
         - session_attention_pct: overall session attention percentage
         - annotated_image: base64-encoded frame with gaze overlays
@@ -52,10 +60,11 @@ async def process_eye_gaze(request: EyeGazeRequest):
 
         result = gaze_service.process_frame(
             request.image,
-            draw_overlay=request.draw_overlay
+            draw_overlay=request.draw_overlay,
+            eye_metrics=request.eye_metrics,
         )
 
-        if "error" in result and result["error"] not in ("no_face", "multiple_faces", "eye_extraction_failed"):
+        if "error" in result and result["error"] not in ("no_face", "multiple_faces", "eye_extraction_failed", "low_confidence"):
             raise HTTPException(status_code=400, detail=result["error"])
 
         return result

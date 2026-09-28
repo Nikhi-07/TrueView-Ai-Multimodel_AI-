@@ -7,22 +7,40 @@ and determines recommended monitoring actions.
 """
 
 import time
-from typing import Dict, Any, List
+import math
+from typing import Dict, Any, List, Set
 from trueview_engine.policy.policy_engine import PolicyEngine
 
 RISK_DECAY_RATE = 1.0  # Points recovered per clean second
+
+SEVERITY_WEIGHTS: Dict[str, float] = {
+    "LOW": 5.0,
+    "MEDIUM": 15.0,
+    "HIGH": 30.0,
+    "CRITICAL": 50.0,
+}
 
 
 class UnifiedDecisionEngine:
     """
     Dynamic risk calculation and decision engine.
+    Calculates 0-100 risk score based on confirmed violation transitions
+    (LOW: +5, MEDIUM: +15, HIGH: +30, CRITICAL: +50) with session isolation.
     """
 
     def __init__(self):
-        self._score: float = 0.0
-        self._peak_score: float = 0.0
-        self._last_ts: float = time.time()
+        self._sessions: Dict[str, Dict[str, Any]] = {}
         self.policy_engine = PolicyEngine()
+
+    def _get_session_state(self, session_id: str) -> Dict[str, Any]:
+        if session_id not in self._sessions:
+            self._sessions[session_id] = {
+                "score": 0.0,
+                "peak_score": 0.0,
+                "active_event_types": set(),
+                "last_ts": time.time(),
+            }
+        return self._sessions[session_id]
 
     def evaluate(
         self,
@@ -35,50 +53,70 @@ class UnifiedDecisionEngine:
         """
         Evaluate current state and return dynamic Risk and Decision payloads.
         """
-        now = time.time()
-        dt = min(max(now - self._last_ts, 0.01), 2.0)
-        self._last_ts = now
-
+        session_id = session_context.get("session_id", "default_session")
         session_type = session_context.get("session_type", "EXAM").upper()
         policy = self.policy_engine.get_policy(session_type)
 
-        # 1. Apply baseline continuous decay
-        decay = RISK_DECAY_RATE * dt
-        self._score = max(0.0, self._score - decay)
+        st = self._get_session_state(session_id)
+        now = time.time()
+        dt = min(max(now - st["last_ts"], 0.01), 2.0)
+        st["last_ts"] = now
 
         events = behaviour_summary.get("events", [])
         reasons: List[str] = []
 
-        # 2. Accumulate weighted risk from confirmed behaviour events
-        risk_increment = 0.0
-        for evt in events:
-            evt_type = evt.get("type", "")
-            pol_eval = self.policy_engine.evaluate_violation(evt_type, session_type)
-            w = pol_eval.get("weight", 2.0)
-            risk_increment += w * dt
-            reasons.append(evt.get("evidence", "Violation detected"))
+        # Filter active vs resolved events
+        active_events = [e for e in events if e.get("state") != "RESOLVED"]
+        current_active_types: Set[str] = set()
 
-        # 3. Accumulate risk from correlated patterns
+        for evt in active_events:
+            evt_type = evt.get("type", "")
+            current_active_types.add(evt_type)
+            reasons.append(evt.get("evidence") or evt.get("message") or f"Violation detected: {evt_type}")
+
+        # Transition detection: newly activated events increment risk score ONCE
+        prev_active: Set[str] = st["active_event_types"]
+        newly_activated = current_active_types - prev_active
+
+        for evt in active_events:
+            evt_type = evt.get("type", "")
+            if evt_type in newly_activated:
+                severity = str(evt.get("severity", "MEDIUM")).upper()
+                pol_eval = self.policy_engine.evaluate_violation(evt_type, session_type)
+                policy_weight = pol_eval.get("weight")
+
+                if severity in SEVERITY_WEIGHTS:
+                    inc = SEVERITY_WEIGHTS[severity]
+                elif policy_weight is not None and policy_weight > 0:
+                    inc = policy_weight * 3.0
+                else:
+                    inc = 15.0
+
+                if uncertainty_eval.get("uncertainty_level") == "UNCERTAIN":
+                    inc *= 0.5
+
+                st["score"] = min(100.0, st["score"] + inc)
+
+        # Correlated patterns add a one-time increment if present
         for pat in correlated_patterns:
-            risk_increment += 5.0 * dt
             reasons.append(f"Correlated pattern: {pat.get('pattern_name')}")
 
-        # Adjust score if uncertainty is UNCERTAIN or REJECTED
-        if uncertainty_eval.get("uncertainty_level") == "UNCERTAIN":
-            risk_increment *= 0.5
-            
-        self._score += risk_increment
+        # Decay: when no active events are present, apply continuous temporal decay
+        if not current_active_types:
+            decay = RISK_DECAY_RATE * dt
+            st["score"] = max(0.0, st["score"] - decay)
 
-        import math
-        if math.isnan(self._score) or math.isinf(self._score):
-            self._score = 0.0
-        score = round(self._score, 1)
+        st["active_event_types"] = current_active_types
 
-        if score > self._peak_score or math.isnan(self._peak_score):
-            self._peak_score = score
-        peak_score = round(self._peak_score, 1)
+        if math.isnan(st["score"]) or math.isinf(st["score"]):
+            st["score"] = 0.0
+        score = round(max(0.0, min(100.0, st["score"])), 1)
 
-        # 4. Risk Level & Non-Judgmental Labeling (Section 18)
+        if score > st["peak_score"] or math.isnan(st["peak_score"]):
+            st["peak_score"] = score
+        peak_score = round(st["peak_score"], 1)
+
+        # Risk Level & Non-Judgmental Labeling
         if score <= 20.0:
             level = "NORMAL"
             risk_label = "NORMAL"
@@ -118,8 +156,9 @@ class UnifiedDecisionEngine:
             }
         }
 
-    def reset(self):
+    def reset(self, session_id: str = None):
         """Reset score counters."""
-        self._score = 0.0
-        self._peak_score = 0.0
-        self._last_ts = time.time()
+        if session_id and session_id in self._sessions:
+            del self._sessions[session_id]
+        else:
+            self._sessions.clear()

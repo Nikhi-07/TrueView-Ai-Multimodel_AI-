@@ -200,8 +200,11 @@ uploads/
 # ─────────────────────────────────────────────────────────────────────────
 # TrueView temporary development files
 # ─────────────────────────────────────────────────────────────────────────
+scratch/
+server/scratch/
 ai-service/scratch/
 ai-service/_backup_before_convnext/
 audit_fast.py
 .freebuff/
+
 

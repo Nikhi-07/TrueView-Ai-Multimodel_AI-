@@ -9,7 +9,10 @@ import { io } from 'socket.io-client';
 import CameraFeed from '../components/Camera/CameraFeed';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import { SESSION_POLICIES } from '../utils/sessionPolicies';
+import useTabSwitchVerification from '../hooks/useTabSwitchVerification';
+import TabSwitchIndicator from '../components/Monitoring/TabSwitchIndicator';
 
 const CONTEXT_OPTIONS = [
   { id: 'EXAM', label: 'Examination (Strict)' },
@@ -42,6 +45,7 @@ export default function LiveMonitoring() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   
   const [alerts, setAlerts] = useState([]);
+  const [socketRisk, setSocketRisk] = useState(null);
 
   const cameraFeedRef = useRef(null);
   const sessionIdRef = useRef(
@@ -71,6 +75,28 @@ export default function LiveMonitoring() {
   const monitoringActiveRef = useRef(false);
   const emittedEventsRef = useRef({});
 
+  // Recover existing session alerts and state on page refresh
+  useEffect(() => {
+    const fetchExistingSession = async () => {
+      try {
+        const res = await api.get(`/ai-engine/sessions/${sessionIdRef.current}`);
+        const loadedAlerts = res.data?.alerts || res.data?.session?.alerts;
+        if (loadedAlerts?.length) {
+          setAlerts(loadedAlerts.map(a => ({
+            id: a.eventId || a.id || a._id || `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+            title: (a.eventType || a.type || 'Violation').replace(/_/g, ' '),
+            msg: a.description || a.evidence || a.message || `AI detected ${a.eventType || a.type}`,
+            type: a.severity === 'CRITICAL' || a.severity === 'HIGH' ? 'danger' : 'warning',
+            severity: a.severity || 'HIGH',
+            confidence: a.confidence,
+            time: a.timestamp ? new Date(a.timestamp).getTime() : Date.now(),
+          })));
+        }
+      } catch (_) {}
+    };
+    fetchExistingSession();
+  }, []);
+
   const speakAlert = useCallback((text) => {
     if (!('speechSynthesis' in window)) return;
     const now = Date.now();
@@ -87,6 +113,51 @@ export default function LiveMonitoring() {
       lastSpokenRef.current = { time: now, text };
     } catch (_) {}
   }, []);
+
+  // Authoritative Tab Switch Verification Hook
+  const handleTabSwitchTerminated = useCallback(async (reason) => {
+    const termReason = reason || 'Maximum tab-switch limit exceeded';
+    setTerminationReason(termReason);
+    if ('speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance("Session terminated. Maximum tab switch limit exceeded.");
+        utterance.volume = 1.0;
+        window.speechSynthesis.speak(utterance);
+      } catch (_) {}
+    }
+    await stopMonitoringDueToKickout();
+  }, []);
+
+  const {
+    tabSwitchCount,
+    maxAllowed: maxTabSwitches,
+    tabSwitchStatus,
+    lastEventTime: tabSwitchLastTime,
+    isTerminated: isTabTerminated,
+    currentWarning: tabWarning,
+    clearWarning: clearTabWarning,
+  } = useTabSwitchVerification({
+    sessionId: sessionIdRef.current,
+    roomId: roomId || undefined,
+    studentId: user?._id || user?.id || undefined,
+    enabled: isMonitoringActive && !isSessionTerminatedRef.current,
+    maxAllowed: 3,
+    onTerminated: handleTabSwitchTerminated,
+  });
+
+  // Audio voice alerts on tab switch warnings
+  useEffect(() => {
+    if (tabWarning) {
+      if (tabWarning.count === 1) {
+        speakAlert("Tab switch detected. Please return to the examination window.");
+      } else if (tabWarning.count === 2) {
+        speakAlert("Tab switch detected. Warning 2 of 3.");
+      } else if (tabWarning.count === 3) {
+        speakAlert("Final warning. Warning 3 of 3. One more tab switch will terminate your session.");
+      }
+    }
+  }, [tabWarning, speakAlert]);
 
   // Initialize Socket.IO connection for real-time live events
   useEffect(() => {
@@ -108,6 +179,69 @@ export default function LiveMonitoring() {
         sessionType,
         sessionDuration: 3600
       });
+      socket.emit('join-session', { sessionId: sessionIdRef.current, roomId: roomId || undefined });
+    });
+
+    socket.on('session_state', (state) => {
+      if (state?.alerts?.length) {
+        setAlerts(state.alerts.map(a => ({
+          id: a.eventId || a.id || `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          title: (a.eventType || a.type || 'Violation').replace(/_/g, ' '),
+          msg: a.description || a.evidence || a.message || `AI detected ${a.eventType || a.type}`,
+          type: a.severity === 'CRITICAL' || a.severity === 'HIGH' ? 'danger' : 'warning',
+          severity: a.severity || 'HIGH',
+          confidence: a.confidence,
+          time: a.timestamp ? new Date(a.timestamp).getTime() : Date.now(),
+        })));
+      }
+      if (state?.trustScore != null) {
+        setSocketRisk(Math.max(0, 100 - state.trustScore));
+      }
+    });
+
+    const handleIncomingAlert = (eventData) => {
+      if (!eventData) return;
+      const evtType = eventData.eventType || eventData.type || '';
+      const state = String(eventData.state || eventData.status || '').toUpperCase();
+      if (state === 'RESOLVED' || state === 'CLEARED') return;
+
+      const rawSev = String(eventData.severity || 'HIGH').toUpperCase();
+      const isDanger = rawSev === 'CRITICAL' || rawSev === 'HIGH';
+      const newAlertItem = {
+        id: eventData.id || eventData.eventId || `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        title: evtType.replace(/_/g, ' '),
+        msg: eventData.message || eventData.description || eventData.evidence || `AI detected ${evtType.replace(/_/g, ' ')}`,
+        type: isDanger ? 'danger' : 'warning',
+        severity: rawSev,
+        confidence: eventData.confidence,
+        time: eventData.timestamp ? new Date(eventData.timestamp).getTime() : Date.now(),
+      };
+      setAlerts(prev => {
+        if (prev.some(a => a.id === newAlertItem.id || (a.title === newAlertItem.title && Math.abs(a.time - newAlertItem.time) < 2000))) {
+          return prev;
+        }
+        return [newAlertItem, ...prev].slice(0, 50);
+      });
+      if (eventData.riskScore != null) {
+        setSocketRisk(eventData.riskScore);
+      }
+    };
+
+    socket.on('proctor:event', handleIncomingAlert);
+    socket.on('proctor_alert', handleIncomingAlert);
+    socket.on('AI_EVENT', handleIncomingAlert);
+    socket.on('ALERT_CREATED', handleIncomingAlert);
+
+    socket.on('TRUST_SCORE_UPDATED', (data) => {
+      if (data?.trustScore != null) {
+        setSocketRisk(Math.max(0, 100 - data.trustScore));
+      }
+    });
+
+    socket.on('RISK_SCORE_UPDATED', (data) => {
+      if (data?.riskScore != null) {
+        setSocketRisk(data.riskScore);
+      }
     });
 
     socket.on('SESSION_SUSPENDED', (data) => {
@@ -179,7 +313,17 @@ export default function LiveMonitoring() {
         audioStreamRef.current.getTracks().forEach(t => t.stop());
         audioStreamRef.current = null;
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // Reuse existing active audio track from CameraFeed if available
+      let stream = null;
+      const cameraStream = cameraFeedRef.current?.getStream?.();
+      const existingAudio = cameraStream?.getAudioTracks?.().find(t => t.readyState === 'live');
+
+      if (existingAudio) {
+        stream = new MediaStream([existingAudio]);
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
       audioStreamRef.current = stream;
 
       const aTrack = stream.getAudioTracks()[0];
@@ -332,30 +476,103 @@ export default function LiveMonitoring() {
     if (reportGeneratedRef.current) return;
     reportGeneratedRef.current = true;
     try {
-      await api.post('/reports/generate', { sessionId: sessionIdRef.current });
+      await api.post('/reports/generate', { 
+        sessionId: sessionIdRef.current,
+        roomId: roomId || undefined,
+        userName: user?.fullName || user?.name,
+        userEmail: user?.email,
+      });
     } catch (_) {}
   };
+
+  const showCameraDisabledToast = useCallback(() => {
+    toast.success(
+      () => (
+        <div className="flex flex-col gap-0.5">
+          <span className="font-bold text-xs text-white">Camera turned off</span>
+          <span className="text-[11px] text-zinc-300">
+            Camera has been disabled after leaving the monitoring room.
+          </span>
+        </div>
+      ),
+      {
+        id: 'camera-disabled-security-toast',
+        duration: 4500,
+        icon: '🔒',
+        style: {
+          background: '#18181b',
+          color: '#f4f4f5',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          borderRadius: '0.75rem',
+          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5)',
+          padding: '10px 14px',
+        }
+      }
+    );
+  }, []);
+
+  // Immediately and synchronously release all hardware tracks, media, timers, and sockets
+  const releaseAllMediaResources = useCallback(() => {
+    // 1. Immediately stop camera feed and hardware tracks
+    if (cameraFeedRef.current?.stopCamera) {
+      try {
+        cameraFeedRef.current.stopCamera();
+      } catch (_) {}
+    }
+
+    // 2. Immediately stop audio capture and audio context
+    stopAudioCapture();
+
+    // 3. Stop media recorder if active
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (_) {}
+      mediaRecorderRef.current = null;
+    }
+
+    // 4. Cancel AI processing loops and timers
+    monitoringActiveRef.current = false;
+    aiInFlightRef.current = false;
+    if (unifiedLoopRef.current) {
+      clearTimeout(unifiedLoopRef.current);
+      unifiedLoopRef.current = null;
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    // 5. Cancel any ongoing speech synthesis
+    if ('speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (_) {}
+    }
+
+    // 6. Cleanly disconnect socket listeners
+    if (socketRef.current) {
+      try {
+        socketRef.current.disconnect();
+      } catch (_) {}
+      socketRef.current = null;
+    }
+  }, []);
 
   const stopMonitoringDueToKickout = async () => {
     if (isSessionTerminatedRef.current) return;
     isSessionTerminatedRef.current = true;
     setIsEnding(true);
 
-    monitoringActiveRef.current = false;
-    if (unifiedLoopRef.current) clearTimeout(unifiedLoopRef.current);
-    
+    // Stop all media streams and hardware tracks synchronously and immediately
+    releaseAllMediaResources();
     await stopVideoCapture();
-    stopAudioCapture();
-    if (cameraFeedRef.current?.stopCamera) {
-      cameraFeedRef.current.stopCamera();
-    }
-    if (socketRef.current) {
-      try { socketRef.current.disconnect(); } catch (_) {}
-    }
 
     // Complete session in MongoDB
     try {
-      await api.post(`/ai-engine/sessions/${sessionIdRef.current}/end`);
+      await api.post(`/ai-engine/sessions/${sessionIdRef.current}/end`, {
+        roomId: roomId || undefined,
+      });
     } catch (_) {}
 
     await generateHostReport();
@@ -372,10 +589,31 @@ export default function LiveMonitoring() {
     setIsEnding(false);
   };
 
-  const addAlert = (msg, type) => {
+  const addAlert = (itemOrMsg, type = 'warning') => {
     setAlerts(prev => {
-      if (prev.length > 0 && prev[0].msg === msg && (Date.now() - prev[0].time) < 3000) return prev;
-      return [{ id: `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`, msg, type, time: Date.now() }, ...prev].slice(0, 50);
+      let item;
+      if (typeof itemOrMsg === 'object' && itemOrMsg !== null) {
+        item = {
+          id: itemOrMsg.id || `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          title: itemOrMsg.title || itemOrMsg.msg || 'Violation Detected',
+          msg: itemOrMsg.msg || itemOrMsg.message || itemOrMsg.evidence || 'Violation Detected',
+          type: itemOrMsg.type || (itemOrMsg.severity === 'CRITICAL' || itemOrMsg.severity === 'HIGH' ? 'danger' : 'warning'),
+          severity: itemOrMsg.severity || (itemOrMsg.type === 'danger' ? 'HIGH' : 'MEDIUM'),
+          confidence: itemOrMsg.confidence,
+          time: itemOrMsg.time || Date.now(),
+        };
+      } else {
+        item = {
+          id: `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          title: String(itemOrMsg || '').replace(/^\[(.*?)\]/, '$1').trim() || 'Alert',
+          msg: String(itemOrMsg || ''),
+          type,
+          severity: type === 'danger' ? 'HIGH' : 'MEDIUM',
+          time: Date.now(),
+        };
+      }
+      if (prev.length > 0 && prev[0].msg === item.msg && (Date.now() - prev[0].time) < 3000) return prev;
+      return [item, ...prev].slice(0, 50);
     });
   };
 
@@ -467,21 +705,40 @@ export default function LiveMonitoring() {
             data.behaviour.events.forEach(evt => {
               const evtState = String(evt.state || 'CONFIRMED').toUpperCase();
               if (emittedEventsRef.current[evt.type] === evtState) return;
-              if (evtState === 'RESOLVED') emittedEventsRef.current = {};
-              emittedEventsRef.current[evt.type] = evtState;
+              if (evtState === 'RESOLVED') {
+                delete emittedEventsRef.current[evt.type];
+              } else {
+                emittedEventsRef.current[evt.type] = evtState;
+              }
               hasNewEvents = true;
 
-              addAlert(`[${evt.type.replace(/_/g, ' ')}] ${evt.evidence}`, evt.severity === 'CRITICAL' ? 'danger' : 'warning');
-              
+              if (evtState !== 'RESOLVED') {
+                const isCritOrHigh = evt.severity === 'CRITICAL' || evt.severity === 'HIGH';
+                addAlert({
+                  id: evt.id || evt.event_id || `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                  title: evt.type ? evt.type.replace(/_/g, ' ') : 'Violation Detected',
+                  msg: evt.message || evt.evidence || `AI detected ${evt.type}`,
+                  type: isCritOrHigh ? 'danger' : 'warning',
+                  severity: evt.severity || 'HIGH',
+                  confidence: evt.confidence,
+                  duration: evt.duration,
+                  time: Date.now()
+                });
+              }
+
               // Spoken voice warnings for participant
-              if (evt.type === 'IDENTITY_MISMATCH') {
+              if (evt.type === 'IDENTITY_MISMATCH' || evt.type === 'POSSIBLE_USER_REPLACEMENT') {
                 speakAlert("Warning! Registered candidate face not detected.");
-              } else if (evt.type === 'PHONE_DETECTED') {
+              } else if (evt.type === 'PHONE_DETECTED' || evt.type === 'MOBILE_PHONE_DETECTED') {
                 speakAlert("Warning! Mobile phone detected in camera view.");
-              } else if (evt.type === 'MULTIPLE_PERSONS' && sessionType === 'EXAM') {
+              } else if ((evt.type === 'MULTIPLE_PERSONS' || evt.type === 'MULTIPLE_PEOPLE_DETECTED') && sessionType === 'EXAM') {
                 speakAlert("Warning! Multiple persons detected in the room.");
-              } else if (evt.type === 'PROLONGED_DISTRACTION' && sessionType === 'EXAM') {
+              } else if ((evt.type === 'PROLONGED_DISTRACTION' || evt.type === 'OFFSCREEN_GLANCE') && sessionType === 'EXAM') {
                 speakAlert("Warning! Please focus directly on your screen.");
+              } else if (evt.type === 'EYES_CLOSED' && sessionType === 'EXAM') {
+                speakAlert("Warning! Candidate eyes appear closed.");
+              } else if (evt.type === 'HEAD_TURNED' && sessionType === 'EXAM') {
+                speakAlert("Warning! Please face the camera directly.");
               } else if (evt.type === 'SPOOF_DETECTED' || evt.type === 'LIVENESS_FAILED') {
                 speakAlert("Warning! Presentation attack detected. Live face required.");
               } else if (evt.type === 'USER_ABSENT') {
@@ -493,18 +750,25 @@ export default function LiveMonitoring() {
               // Emit through socket to admin/reviewer and proctor room
               if (socketRef.current?.connected) {
                 const eventPayload = {
+                  id: evt.id || evt.event_id || `evt_${Date.now()}`,
                   sessionId: sessionIdRef.current,
                   roomId: roomId || undefined,
                   eventType: evt.type,
                   type: evt.type,
+                  category: evt.category || 'BEHAVIOUR',
+                  source: evt.source || 'AI_ENGINE',
                   severity: evt.severity,
                   confidence: evt.confidence || 0.9,
                   evidence: evt.evidence,
+                  message: evt.message || evt.evidence,
+                  description: evt.message || evt.evidence,
+                  state: evt.state || 'CONFIRMED',
+                  duration: evt.duration,
                   timestamp: new Date().toISOString(),
                   captureTimestamp: captureTs,
                 };
                 socketRef.current.emit('ai_event', eventPayload);
-                socketRef.current.emit('AI_EVENT', eventPayload);
+                socketRef.current.emit('proctor:event', eventPayload);
                 socketRef.current.emit('proctor_alert', eventPayload);
               }
             });
@@ -550,18 +814,63 @@ export default function LiveMonitoring() {
     scheduleNext(100);
   };
 
-  // Start meeting automatically on mount
+  const isMountedRef = useRef(true);
+
+  // Start meeting automatically on mount, attach unload listeners, and guarantee cleanup on unmount
   useEffect(() => {
+    isMountedRef.current = true;
     if (!isMonitoringActive && !terminationReason) {
       startMeeting();
     }
-    return () => {
-      stopMonitoringDueToKickout();
+
+    const handleWindowUnload = () => {
+      releaseAllMediaResources();
     };
-  }, []);
+    window.addEventListener('beforeunload', handleWindowUnload);
+    window.addEventListener('pagehide', handleWindowUnload);
+
+    return () => {
+      isMountedRef.current = false;
+      window.removeEventListener('beforeunload', handleWindowUnload);
+      window.removeEventListener('pagehide', handleWindowUnload);
+      
+      // Delay unmount teardown slightly to handle React 18 Strict Mode immediate remount
+      setTimeout(() => {
+        if (!isMountedRef.current) {
+          if (roomId) {
+            api.post(`/rooms/${roomId}/leave`, {
+              candidateId: user?._id || user?.id,
+              sessionId: sessionIdRef.current,
+            }).catch(() => {});
+          }
+          releaseAllMediaResources();
+          showCameraDisabledToast();
+          stopMonitoringDueToKickout();
+        }
+      }, 50);
+    };
+  }, [releaseAllMediaResources, showCameraDisabledToast, roomId, user]);
 
   const handleEndSessionManual = async () => {
     if (window.confirm("Are you sure you want to end this proctoring session? Telemetry, recording, and report will be saved.")) {
+      if (socketRef.current?.connected) {
+        socketRef.current.emit('leave_room', {
+          roomId: roomId || undefined,
+          sessionId: sessionIdRef.current,
+          candidateId: user?._id || user?.id,
+          user: user ? { id: String(user._id || user.id), name: user.fullName || user.name } : null
+        });
+      }
+      if (roomId) {
+        try {
+          await api.post(`/rooms/${roomId}/leave`, {
+            candidateId: user?._id || user?.id,
+            sessionId: sessionIdRef.current,
+          });
+        } catch (_) {}
+      }
+      releaseAllMediaResources();
+      showCameraDisabledToast();
       await stopMonitoringDueToKickout();
       navigate('/sessions');
     }
@@ -570,7 +879,8 @@ export default function LiveMonitoring() {
   const currentPolicy = SESSION_POLICIES[sessionType] || SESSION_POLICIES.EXAM;
   const allowMediaToggle = currentPolicy?.allowMediaToggle === true;
 
-  const riskScoreVal = Math.round(engineResult?.risk?.score ?? engineResult?.risk?.current ?? 0);
+  const engineRisk = Math.round(engineResult?.risk?.score ?? engineResult?.risk?.current ?? 0);
+  const riskScoreVal = Math.max(engineRisk, socketRisk ?? 0);
   const isLivenessLive = engineResult?.liveness?.is_live !== false && engineResult?.liveness?.status !== 'spoof';
 
   const rawIdentStatus = engineResult?.identity?.status || (engineResult?.identity?.verified ? 'VERIFIED' : (engineResult?.attention?.status === 'USER_ABSENT' ? 'FACE_NOT_DETECTED' : 'UNKNOWN'));
@@ -583,21 +893,61 @@ export default function LiveMonitoring() {
     <div className="fixed inset-0 z-50 bg-[#202124] text-white flex flex-col font-sans overflow-hidden">
       
       {/* Termination Modal Overlay */}
-      {terminationReason && (
-        <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-6">
-          <div className="bg-[#2b2d31] border border-[#3f4147] rounded-2xl shadow-2xl max-w-md w-full p-8 text-center space-y-6">
-            <div className="w-20 h-20 bg-rose-500/10 text-rose-500 rounded-full flex items-center justify-center mx-auto border border-rose-500/20">
+      {(terminationReason || isTabTerminated) && (
+        <div className="absolute inset-0 z-[100] bg-black/85 backdrop-blur-md flex items-center justify-center p-6">
+          <div className="bg-[#2b2d31] border border-rose-500/40 rounded-2xl shadow-2xl max-w-md w-full p-8 text-center space-y-6">
+            <div className="w-20 h-20 bg-rose-500/10 text-rose-500 rounded-full flex items-center justify-center mx-auto border border-rose-500/30">
               <PhoneOff size={40} />
             </div>
             <div>
-              <h2 className="text-2xl font-normal text-white mb-3">Session Terminated</h2>
-              <p className="text-gray-400 font-normal leading-relaxed">{terminationReason}</p>
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-mono font-bold mb-3">
+                <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                SECURITY TERMINATION
+              </div>
+              <h2 className="text-2xl font-bold text-white mb-2">Session Terminated</h2>
+              <p className="text-gray-300 text-sm font-normal leading-relaxed">
+                {terminationReason || 'Maximum tab-switch limit exceeded.'}
+              </p>
+              <div className="mt-3 p-3 rounded-xl bg-black/40 border border-white/10 text-xs font-mono text-zinc-300">
+                Tab Switches: <strong className="text-rose-400 font-bold">{Math.max(tabSwitchCount, 4)} / {maxTabSwitches}</strong> (Exceeded)
+              </div>
             </div>
-            <button 
-              onClick={() => navigate('/sessions')}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-8 rounded-lg transition-colors"
-            >
-              View in My Sessions
+            <div className="flex flex-col sm:flex-row items-center gap-3">
+              <button 
+                onClick={() => navigate('/sessions')}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-xl transition-colors cursor-pointer text-xs"
+              >
+                View in My Sessions
+              </button>
+              <button 
+                onClick={() => navigate('/reports')}
+                className="w-full bg-zinc-700 hover:bg-zinc-600 text-white font-medium py-2.5 px-4 rounded-xl transition-colors cursor-pointer text-xs"
+              >
+                View Reports
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Warning Banner for Tab Switch Violations (Warnings 1, 2, 3) */}
+      {tabWarning && !isTabTerminated && !terminationReason && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 max-w-md w-full mx-auto px-4">
+          <div className={`p-4 rounded-2xl border shadow-2xl backdrop-blur-md flex items-start gap-3 animate-bounce ${
+            tabWarning.count === 3 ? 'bg-rose-950/95 border-rose-500 text-white' : 'bg-amber-950/95 border-amber-500 text-white'
+          }`}>
+            <AlertTriangle size={24} className={tabWarning.count === 3 ? 'text-rose-300 shrink-0' : 'text-amber-300 shrink-0'} />
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-sm">{tabWarning.title}</h4>
+                <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-black/40">
+                  {tabWarning.count} / 3
+                </span>
+              </div>
+              <p className="text-xs mt-1 text-slate-200">{tabWarning.text}</p>
+            </div>
+            <button onClick={clearTabWarning} className="text-white/60 hover:text-white text-xs font-bold px-2 py-1 cursor-pointer">
+              ✕
             </button>
           </div>
         </div>
@@ -625,6 +975,15 @@ export default function LiveMonitoring() {
         </div>
 
         <div className="flex items-center gap-4 text-xs font-medium">
+          {/* Header Tab Switch Indicator */}
+          <TabSwitchIndicator
+            count={tabSwitchCount}
+            maxAllowed={maxTabSwitches}
+            status={tabSwitchStatus}
+            mode={sessionType}
+            compact={true}
+          />
+
           <div className="flex items-center gap-2 px-3 py-1 bg-black/40 rounded-lg border border-white/5">
             <span className="text-zinc-400">STATUS:</span>
             <span className="text-emerald-400 font-bold flex items-center gap-1.5">
@@ -644,6 +1003,15 @@ export default function LiveMonitoring() {
             <Clock size={12} className="text-emerald-400" />
             <span className="text-white font-bold">{formatTime(elapsedTime)}</span>
           </div>
+
+          <button
+            onClick={handleEndSessionManual}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-500/15 hover:bg-rose-500/25 active:bg-rose-500/30 text-rose-300 hover:text-white border border-rose-500/30 rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer"
+            title="Leave / Exit Monitoring Room"
+          >
+            <PhoneOff size={13} />
+            <span className="hidden sm:inline">Leave Room</span>
+          </button>
         </div>
       </header>
 
@@ -657,7 +1025,7 @@ export default function LiveMonitoring() {
             {isCamOn ? (
               <CameraFeed
                 ref={cameraFeedRef}
-                isMonitoringActive={isMonitoringActive}
+                isActive={isCamOn}
                 onDetectionUpdate={(data) => {
                   if (data?.trackInterrupted) {
                     handleTrackInterrupted('camera');
@@ -686,6 +1054,39 @@ export default function LiveMonitoring() {
                     {isIdentityMismatch ? 'MISMATCH' : isIdentityVerified ? 'VERIFIED' : isFaceNotDetected ? 'NOT DETECTED' : 'UNKNOWN'}
                   </strong>
                 </span>
+              </div>
+            </div>
+
+            {/* Floating Examination / Interview HUD Tab Switch Indicator */}
+            <div className="absolute top-20 left-4 z-20 max-w-xs pointer-events-auto">
+              <div className={`p-3 rounded-xl border backdrop-blur-md shadow-lg text-white transition-all ${
+                tabSwitchCount >= 4
+                  ? 'bg-rose-950/85 border-rose-500/50'
+                  : tabSwitchCount === 3
+                  ? 'bg-rose-950/85 border-rose-500/50 animate-pulse'
+                  : tabSwitchCount > 0
+                  ? 'bg-amber-950/85 border-amber-500/50'
+                  : 'bg-black/70 border-white/10'
+              }`}>
+                <div className="flex items-center justify-between text-[10.5px] font-mono font-bold uppercase tracking-wider text-zinc-300 mb-1.5 gap-2">
+                  <span>TAB SWITCH VERIFICATION</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[9.5px] font-bold ${
+                    tabSwitchCount >= 4 ? 'bg-rose-600 text-white' : tabSwitchCount === 3 ? 'bg-rose-500/30 text-rose-300' : tabSwitchCount > 0 ? 'bg-amber-500/30 text-amber-300' : 'bg-emerald-500/20 text-emerald-300'
+                  }`}>
+                    {tabSwitchCount >= 4 ? 'TERMINATED' : tabSwitchStatus}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-zinc-400">{sessionType === 'EXAM' ? 'Warnings:' : 'Tab Switches:'}</span>
+                  <span className={`font-extrabold ${tabSwitchCount >= 4 ? 'text-rose-400' : tabSwitchCount === 3 ? 'text-rose-400' : tabSwitchCount > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                    {tabSwitchCount} / {maxTabSwitches}
+                  </span>
+                </div>
+                {tabSwitchCount > 0 && tabSwitchCount < 4 && (
+                  <p className="text-[10px] text-amber-300 mt-1.5 border-t border-white/10 pt-1">
+                    {tabSwitchCount === 3 ? 'Final warning: One more tab switch will terminate your session.' : 'Return to examination window.'}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -783,6 +1184,17 @@ export default function LiveMonitoring() {
                 </button>
               </div>
 
+              {/* Sidebar Tab Switch Verification Status */}
+              <div className="p-3 border-b border-[#3f4147] bg-[#232428]">
+                <TabSwitchIndicator
+                  count={tabSwitchCount}
+                  maxAllowed={maxTabSwitches}
+                  status={tabSwitchStatus}
+                  lastEventTime={tabSwitchLastTime}
+                  mode={sessionType}
+                />
+              </div>
+
               <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
                 {alerts.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-gray-500 space-y-3">
@@ -797,16 +1209,35 @@ export default function LiveMonitoring() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       className={`p-3 rounded-lg border text-xs shadow-sm ${
-                        alert.type === 'danger' 
+                        alert.type === 'danger' || alert.severity === 'CRITICAL' || alert.severity === 'HIGH'
                           ? 'bg-rose-500/15 border-rose-500/40 text-rose-200' 
                           : 'bg-amber-500/15 border-amber-500/40 text-amber-200'
                       }`}
                     >
-                      <div className="flex items-start gap-2">
-                        <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-                        <span className="font-semibold">{alert.msg}</span>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-2">
+                          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                          <div>
+                            <span className="font-semibold block">{alert.title || alert.msg}</span>
+                            {alert.title && alert.msg && alert.title !== alert.msg && !alert.msg.startsWith(`[${alert.title}]`) && (
+                              <p className="text-[11px] text-zinc-300 mt-0.5">{alert.msg}</p>
+                            )}
+                          </div>
+                        </div>
+                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold uppercase shrink-0 ${
+                          alert.severity === 'CRITICAL' || alert.severity === 'HIGH' || alert.type === 'danger'
+                            ? 'bg-rose-500/30 text-rose-300'
+                            : 'bg-amber-500/30 text-amber-300'
+                        }`}>
+                          {alert.severity || (alert.type === 'danger' ? 'HIGH' : 'MEDIUM')}
+                        </span>
                       </div>
-                      <div className="text-[10px] text-gray-400 mt-2 flex justify-end font-mono">
+                      {alert.confidence != null && (
+                        <div className="text-[10px] text-zinc-400 mt-1.5 font-mono">
+                          Confidence: {Math.round(alert.confidence <= 1 ? alert.confidence * 100 : alert.confidence)}%
+                        </div>
+                      )}
+                      <div className="text-[10px] text-gray-400 mt-1 flex justify-end font-mono">
                         {new Date(alert.time).toLocaleTimeString()}
                       </div>
                     </motion.div>

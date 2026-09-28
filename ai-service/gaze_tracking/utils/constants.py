@@ -24,24 +24,68 @@ LEFT_EYE_INNER  = 42
 LEFT_EYE_OUTER  = 45
 
 # ──────────────────────────────────────────────
+# MediaPipe 468/478 Eye Landmark Indices (6 points for EAR)
+# ──────────────────────────────────────────────
+# Right eye (subject's right eye, viewer's left):
+# outer corner: 33, top pair: 160, 158, inner corner: 133, bottom pair: 153, 144
+MEDIAPIPE_RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
+# Left eye (subject's left eye, viewer's right):
+# inner corner: 362, top pair: 385, 387, outer corner: 263, bottom pair: 373, 380
+MEDIAPIPE_LEFT_EYE_INDICES  = [362, 385, 387, 263, 373, 380]
+
+# ──────────────────────────────────────────────
 # Gaze Direction Enums
 # ──────────────────────────────────────────────
 class GazeDirection:
     """Enumeration of gaze direction labels."""
-    CENTER = "center"
-    LEFT   = "left"
-    RIGHT  = "right"
-    UP     = "up"
-    DOWN   = "down"
+    CENTER  = "center"
+    LEFT    = "left"
+    RIGHT   = "right"
+    UP      = "up"
+    DOWN    = "down"
+    UNKNOWN = "unknown"
 
 # ──────────────────────────────────────────────
-# Attention Status Enums
+# Eye Status & Attention Enums
 # ──────────────────────────────────────────────
+class EyeStatus:
+    """Enumeration of physical eye openness states."""
+    OPEN             = "OPEN"
+    PARTIALLY_CLOSED = "PARTIALLY_CLOSED"
+    BLINKING         = "BLINKING"
+    CLOSED           = "CLOSED"
+    UNKNOWN          = "UNKNOWN"
+
 class AttentionStatus:
     """Enumeration of attention classification states."""
-    FOCUSED      = "focused"
-    DISTRACTED   = "distracted"
-    LOOKING_AWAY = "looking_away"
+    FOCUSED            = "focused"
+    BLINKING           = "blinking"
+    EYES_CLOSED        = "eyes_closed"
+    DISTRACTED         = "distracted"
+    LOOKING_AWAY       = "looking_away"
+    FACE_NOT_DETECTED  = "face_not_detected"
+
+class FocusState:
+    """High-level focus states corresponding to proctoring policies."""
+    FOCUSED           = "FOCUSED"
+    BLINKING          = "BLINKING"
+    EYES_CLOSED       = "EYES_CLOSED"
+    OFFSCREEN         = "OFFSCREEN"
+    DISTRACTED        = "DISTRACTED"
+    FACE_NOT_DETECTED = "FACE_NOT_DETECTED"
+
+# ──────────────────────────────────────────────
+# Eye Openness / Aspect Ratio (EAR) Thresholds
+# Calibrated for MediaPipe & geometric EAR
+# ──────────────────────────────────────────────
+EYE_CLOSED_THRESHOLD               = 0.21   # averageEAR <= 0.21 indicates eye closure
+EYE_OPEN_THRESHOLD                 = 0.25   # averageEAR >= 0.25 indicates fully open
+BLINK_MAX_DURATION_SECONDS         = 0.40   # Closures <= 0.40s (400ms) treated as natural blink
+BLINK_MAX_DURATION_MS              = 400
+PROLONGED_CLOSURE_SECONDS          = 0.85   # Closures > 0.85s treated as inattention
+EYES_CLOSED_ALERT_DURATION_SECONDS = 1.00   # Closures >= 1.0s trigger inattention alert
+EYES_CLOSED_ALERT_DURATION_MS      = 1000
+MIN_FACE_CONFIDENCE                = 0.50   # Below this, face is considered UNKNOWN
 
 # ──────────────────────────────────────────────
 # Iris Position Thresholds (normalized 0.0 – 1.0)

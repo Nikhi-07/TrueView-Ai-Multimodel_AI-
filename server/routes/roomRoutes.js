@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const os = require('os');
 const Room = require('../models/Room');
 const Session = require('../models/Session');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, optionalProtect } = require('../middleware/authMiddleware');
 
 // Helper to determine the local LAN IP for WhatsApp/mobile shareable links
 function getLanIp() {
@@ -12,7 +12,6 @@ function getLanIp() {
     const interfaces = os.networkInterfaces();
     for (const name of Object.keys(interfaces)) {
       for (const iface of interfaces[name]) {
-        // Skip over internal (i.e. 127.0.0.1) and non-IPv4 addresses
         if (iface.family === 'IPv4' && !iface.internal && !iface.address.startsWith('169.254')) {
           return iface.address;
         }
@@ -31,95 +30,57 @@ function generateJoinCode() {
   return code;
 }
 
-// Ensure default demo rooms exist in MongoDB on startup/first load
-async function ensureSeedRooms() {
-  try {
-    const count = await Room.countDocuments();
-    if (count === 0) {
-      const demoRooms = [
-        {
-          roomId: 'TRV-1001',
-          joinCode: 'A7K9P2',
-          joinToken: 'token_demo_1001',
-          title: 'Computer Science CS101 Final Exam',
-          mode: 'EXAM',
-          sessionType: 'EXAM',
-          host: { id: 'host_01', name: 'Dr. Sarah Jenkins', email: 'admin@trueview.ai' },
-          status: 'ACTIVE',
-          maxParticipants: 50,
-          participantsCount: 2,
-          voiceAlerts: true,
-          warningLimit: 5,
-          criticalLimit: 3,
-          suspensionLimit: 1,
-          durationMinutes: 60,
-          participants: [
-            { id: 'cand_01', sessionId: 'TRV-1001-DEMO1', name: 'Rahul Sharma', email: 'rahul@example.com', status: 'MONITORING', riskScore: 12, riskLevel: 'NORMAL', violations: 1, liveness: 'LIVE', faceDetected: true, phoneDetected: false },
-            { id: 'cand_02', sessionId: 'TRV-1001-DEMO2', name: 'Priya Patel', email: 'priya@example.com', status: 'MONITORING', riskScore: 68, riskLevel: 'HIGH', violations: 7, liveness: 'LIVE', faceDetected: true, phoneDetected: true }
-          ]
-        },
-        {
-          roomId: 'TRV-1002',
-          joinCode: 'B4M8Q1',
-          joinToken: 'token_demo_1002',
-          title: 'Senior Full-Stack Architect Technical Interview',
-          mode: 'INTERVIEW',
-          sessionType: 'INTERVIEW',
-          host: { id: 'host_02', name: 'Tech Hiring Team', email: 'hiring@trueview.ai' },
-          status: 'ACTIVE',
-          maxParticipants: 5,
-          participantsCount: 1,
-          voiceAlerts: false,
-          warningLimit: 8,
-          criticalLimit: 5,
-          suspensionLimit: 3,
-          durationMinutes: 45,
-          participants: [
-            { id: 'cand_03', sessionId: 'TRV-1002-DEMO3', name: 'Alex Mercer', email: 'alex@example.com', status: 'MONITORING', riskScore: 8, riskLevel: 'NORMAL', violations: 0, liveness: 'LIVE', faceDetected: true, phoneDetected: false }
-          ]
-        },
-        {
-          roomId: 'TRV-1003',
-          joinCode: 'C9N2X5',
-          joinToken: 'token_demo_1003',
-          title: 'Advanced Machine Learning Lecture & Q&A',
-          mode: 'ONLINE_CLASS',
-          sessionType: 'ONLINE_CLASS',
-          host: { id: 'host_03', name: 'Prof. Alan Turing', email: 'alan@trueview.ai' },
-          status: 'ACTIVE',
-          maxParticipants: 100,
-          participantsCount: 0,
-          voiceAlerts: false,
-          warningLimit: 15,
-          criticalLimit: 10,
-          suspensionLimit: 5,
-          durationMinutes: 90,
-          participants: []
-        }
-      ];
-      await Room.insertMany(demoRooms);
-    }
-  } catch (err) {
-    console.warn('[RoomService] Seed check warning:', err.message);
-  }
-}
-ensureSeedRooms();
-
 // @route   GET /api/rooms
-// @desc    List all proctor rooms from MongoDB
-// @access  Public / Private
-router.get('/', async (req, res, next) => {
+// @desc    List virtual rooms owned by the currently authenticated user
+// @access  Private (Authenticated Users Only)
+router.get('/', protect, async (req, res, next) => {
   try {
-    const rooms = await Room.find().sort({ createdAt: -1 }).lean();
+    const userId = String(req.user._id || req.user.id);
+    const userEmail = req.user.email;
+    const userRole = req.user.role;
+
+    // Filter strictly to rooms owned/created by the current user
+    // Admins can see all rooms only if explicitly requested via ?all=true
+    let filter;
+    if (userRole === 'admin' && req.query.all === 'true') {
+      filter = {
+        roomId: { $ne: 'TRV-DOES-NOT-EXIST-404' }
+      };
+    } else {
+      filter = {
+        $and: [
+          { roomId: { $ne: 'TRV-DOES-NOT-EXIST-404' } },
+          {
+            $or: [
+              { ownerId: userId },
+              { createdBy: userId },
+              { hostUserId: userId },
+              { 'host.id': userId },
+              { 'host.email': userEmail },
+            ]
+          }
+        ]
+      };
+    }
+
+    const rooms = await Room.find(filter).sort({ createdAt: -1 }).lean();
     const lanIp = getLanIp();
     const hostPort = process.env.CLIENT_PORT || '5173';
 
-    const enrichedRooms = rooms.map(r => ({
-      ...r,
-      id: r.roomId,
-      joinUrl: `http://${lanIp}:${hostPort}/join/${r.roomId}?token=${r.joinCode}`,
-      hostName: r.host?.name || 'Session Host',
-    }));
+    const enrichedRooms = rooms.map(r => {
+      const activeParticipants = (r.participants || []).filter(p => p.status !== 'LEFT');
+      return {
+        ...r,
+        id: r.roomId,
+        ownerId: r.ownerId || r.host?.id || userId,
+        ownerName: r.ownerName || r.host?.name || 'Session Host',
+        ownerEmail: r.ownerEmail || r.host?.email || '',
+        title: (!r.title || r.title === 'null' || r.title === 'undefined') ? 'Computer Science Examination' : r.title,
+        joinUrl: `http://${lanIp}:${hostPort}/join/${r.roomId}?token=${r.joinCode}`,
+        hostName: r.ownerName || r.host?.name || 'Session Host',
+        participantsCount: activeParticipants.length,
+      };
+    });
 
     res.json({
       success: true,
@@ -138,19 +99,41 @@ router.get('/', async (req, res, next) => {
 router.get('/:roomId/public', async (req, res, next) => {
   try {
     const { roomId } = req.params;
-    const token = req.query.token;
+    const cleanRoomId = (roomId || '').trim().toUpperCase();
 
-    let room = await Room.findOne({
+    if (cleanRoomId === 'TRV-DOES-NOT-EXIST-404' || !cleanRoomId) {
+      return res.status(404).json({
+        success: false,
+        message: 'Room not found'
+      });
+    }
+
+    const room = await Room.findOne({
       $or: [
-        { roomId: roomId.toUpperCase() },
-        { joinCode: roomId.toUpperCase() }
+        { roomId: cleanRoomId },
+        { joinCode: cleanRoomId }
       ]
     }).lean();
 
     if (!room) {
       return res.status(404).json({
         success: false,
-        message: `Proctoring room "${roomId}" was not found. Please check your join link or code.`
+        message: 'Room not found'
+      });
+    }
+
+    const token = (req.query.token || req.headers['x-join-token'] || '').trim();
+    if (!token) {
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid or missing join token. A valid invitation link is required.'
+      });
+    }
+
+    if (token !== room.joinToken && token !== room.joinCode) {
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid join token. You cannot enter without a valid room invitation link.'
       });
     }
 
@@ -161,8 +144,21 @@ router.get('/:roomId/public', async (req, res, next) => {
       });
     }
 
+    // Expiry check if room had a scheduled time & duration
+    if (room.scheduledAt && room.durationMinutes) {
+      const scheduledTime = new Date(room.scheduledAt).getTime();
+      const expirationTime = scheduledTime + (room.durationMinutes * 60 * 1000) + (60 * 60 * 1000); // 1hr buffer
+      if (Date.now() > expirationTime && room.status === 'ENDED') {
+        return res.status(400).json({
+          success: false,
+          message: 'This proctoring session schedule has expired.'
+        });
+      }
+    }
+
     const lanIp = getLanIp();
     const hostPort = process.env.CLIENT_PORT || '5173';
+    const activeParticipants = (room.participants || []).filter(p => p.status !== 'LEFT');
 
     res.json({
       success: true,
@@ -170,12 +166,13 @@ router.get('/:roomId/public', async (req, res, next) => {
         roomId: room.roomId,
         joinCode: room.joinCode,
         title: room.title,
-        hostName: room.host?.name || 'Session Host',
+        hostName: room.ownerName || room.host?.name || 'Session Host',
+        ownerId: room.ownerId || room.host?.id,
         mode: room.mode,
         sessionType: room.sessionType,
         status: room.status,
         maxParticipants: room.maxParticipants,
-        participantsCount: room.participantsCount || room.participants?.length || 0,
+        participantsCount: activeParticipants.length,
         durationMinutes: room.durationMinutes || 60,
         voiceAlerts: room.voiceAlerts,
         requireIdentity: room.requireIdentity,
@@ -189,9 +186,9 @@ router.get('/:roomId/public', async (req, res, next) => {
 });
 
 // @route   POST /api/rooms
-// @desc    Create a new Virtual Proctor Room in MongoDB
-// @access  Private (or authenticated fallback)
-router.post('/', async (req, res, next) => {
+// @desc    Create a new Virtual Proctor Room attached to the authenticated user
+// @access  Private (Authenticated User Only)
+router.post('/', protect, async (req, res, next) => {
   try {
     const {
       title,
@@ -229,11 +226,14 @@ router.post('/', async (req, res, next) => {
     }
 
     const joinToken = crypto.randomBytes(16).toString('hex');
-    const hostUser = req.user || {};
+    const ownerId = String(req.user._id || req.user.id);
+    const ownerName = req.user.fullName || req.user.name || 'Session Host';
+    const ownerEmail = req.user.email || '';
+
     const hostInfo = {
-      id: hostUser._id ? String(hostUser._id) : (hostUser.id || 'host_admin'),
-      name: hostUser.fullName || hostUser.name || 'Dr. Sarah Jenkins',
-      email: hostUser.email || 'admin@trueview.ai',
+      id: ownerId,
+      name: ownerName,
+      email: ownerEmail,
     };
 
     const lanIp = getLanIp();
@@ -245,6 +245,11 @@ router.post('/', async (req, res, next) => {
       joinCode,
       joinToken,
       title: title?.trim() || 'New Monitored Session',
+      ownerId,
+      ownerName,
+      ownerEmail,
+      createdBy: ownerId,
+      hostUserId: ownerId,
       host: hostInfo,
       mode: selectedMode,
       sessionType: selectedMode,
@@ -264,12 +269,21 @@ router.post('/', async (req, res, next) => {
     const responseRoom = {
       ...newRoom.toObject(),
       id: newRoom.roomId,
+      ownerId,
+      ownerName,
+      ownerEmail,
       joinUrl,
       hostName: hostInfo.name,
+      participantsCount: 0,
+      participants: [],
     };
 
-    // Broadcast room creation if sockets active
-    req.app.get('io')?.emit('ROOM_CREATED', { room: responseRoom });
+    // Broadcast room creation to the owner's personal channel and general channel
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${ownerId}`).emit('ROOM_CREATED', { room: responseRoom });
+      io.emit('ROOM_CREATED', { room: responseRoom });
+    }
 
     res.status(201).json({
       success: true,
@@ -284,43 +298,73 @@ router.post('/', async (req, res, next) => {
 });
 
 // @route   GET /api/rooms/:roomId
-// @desc    Get complete room details including active participants and sessions
-// @access  Public / Private
-router.get('/:roomId', async (req, res, next) => {
+// @desc    Get complete room details (with authorization check)
+// @access  Public / Private (Enforces Ownership for Management)
+router.get('/:roomId', optionalProtect, async (req, res, next) => {
   try {
     const { roomId } = req.params;
-    let room = await Room.findOne({
+    const cleanRoomId = (roomId || '').trim().toUpperCase();
+
+    if (cleanRoomId === 'TRV-DOES-NOT-EXIST-404' || !cleanRoomId) {
+      return res.status(404).json({ success: false, message: 'Room not found' });
+    }
+
+    const room = await Room.findOne({
       $or: [
-        { roomId: roomId.toUpperCase() },
-        { joinCode: roomId.toUpperCase() }
+        { roomId: cleanRoomId },
+        { joinCode: cleanRoomId }
       ]
     });
 
-    const lanIp = getLanIp();
-    const hostPort = process.env.CLIENT_PORT || '5173';
-
     if (!room) {
-      // Create a fallback room record so links never crash
-      const selectedMode = 'EXAM';
-      room = await Room.create({
-        roomId: roomId.toUpperCase(),
-        joinCode: generateJoinCode(),
-        joinToken: crypto.randomBytes(16).toString('hex'),
-        title: `Monitored Session ${roomId}`,
-        host: { id: 'host_01', name: 'Session Host', email: 'admin@trueview.ai' },
-        mode: selectedMode,
-        sessionType: selectedMode,
-        status: 'ACTIVE',
-        maxParticipants: 30,
-        participantsCount: 0,
-        participants: []
+      return res.status(404).json({ success: false, message: 'Room not found' });
+    }
+
+    // Authorization verification:
+    // If the requester is authenticated, ensure they are either the room owner/creator,
+    // a participant registered in the room, an administrator, or have provided a valid join token.
+    const reqToken = (req.query?.token || req.headers['x-join-token'] || '').trim();
+    const hasValidToken = reqToken && (reqToken === room.joinToken || reqToken === room.joinCode);
+
+    if (req.user) {
+      const uId = String(req.user._id || req.user.id);
+      const uEmail = req.user.email;
+      const isOwner = (room.ownerId && room.ownerId === uId) ||
+                      (room.createdBy && room.createdBy === uId) ||
+                      (room.hostUserId && room.hostUserId === uId) ||
+                      (room.host?.id && room.host.id === uId) ||
+                      (room.host?.email && room.host.email === uEmail);
+      const isParticipant = (room.participants || []).some(p => p.id === uId || p.email === uEmail);
+      const isAdmin = req.user.role === 'admin';
+
+      if (!isOwner && !isParticipant && !isAdmin && !hasValidToken) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to view this room.'
+        });
+      }
+    } else if (!hasValidToken) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not authorized to view this room.'
       });
     }
 
+    const lanIp = getLanIp();
+    const hostPort = process.env.CLIENT_PORT || '5173';
     const roomObj = room.toObject();
     roomObj.id = roomObj.roomId;
+
+    if (!roomObj.title || roomObj.title === 'null' || roomObj.title === 'undefined') {
+      roomObj.title = 'Computer Science Examination';
+    }
     roomObj.joinUrl = `http://${lanIp}:${hostPort}/join/${roomObj.roomId}?token=${roomObj.joinCode}`;
-    roomObj.hostName = roomObj.host?.name || 'Session Host';
+    roomObj.hostName = roomObj.ownerName || roomObj.host?.name || 'Session Host';
+    roomObj.ownerId = roomObj.ownerId || roomObj.host?.id;
+
+    // Authoritative active count
+    const activeParticipants = (roomObj.participants || []).filter(p => p.status !== 'LEFT');
+    roomObj.participantsCount = activeParticipants.length;
 
     res.json({
       success: true,
@@ -338,37 +382,50 @@ router.get('/:roomId', async (req, res, next) => {
 router.post('/:roomId/join', protect, async (req, res, next) => {
   try {
     const { roomId } = req.params;
-    const { token, mode, title } = req.body;
+    const cleanRoomId = (roomId || '').trim().toUpperCase();
 
-    // Verify user is authenticated and registered
-    if (!req.user || req.user.status !== 'Active' || req.user.registrationStatus === 'PENDING_FACE_REGISTRATION' || req.user.registrationStatus === 'PENDING_VOICE_REGISTRATION') {
-      return res.status(403).json({
+    if (cleanRoomId === 'TRV-DOES-NOT-EXIST-404' || !cleanRoomId) {
+      return res.status(404).json({
         success: false,
-        message: 'Your account is not active or registered. Please login or complete registration before joining.'
+        message: 'Room not found'
       });
     }
 
-    let room = await Room.findOne({
+    // Verify user is authenticated and active
+    if (!req.user || req.user.status !== 'Active') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is not active. Please login or complete registration before joining.'
+      });
+    }
+
+    const room = await Room.findOne({
       $or: [
-        { roomId: roomId.toUpperCase() },
-        { joinCode: roomId.toUpperCase() }
+        { roomId: cleanRoomId },
+        { joinCode: cleanRoomId }
       ]
     });
 
     if (!room) {
-      const selectedMode = (mode || 'EXAM').toUpperCase();
-      room = await Room.create({
-        roomId: roomId.toUpperCase(),
-        joinCode: generateJoinCode(),
-        joinToken: crypto.randomBytes(16).toString('hex'),
-        title: title || `Monitored Session ${roomId}`,
-        host: { id: 'host_01', name: 'TrueView Host', email: 'admin@trueview.ai' },
-        mode: selectedMode,
-        sessionType: selectedMode,
-        status: 'ACTIVE',
-        maxParticipants: 30,
-        participantsCount: 0,
-        participants: []
+      return res.status(404).json({
+        success: false,
+        message: 'Room not found'
+      });
+    }
+
+    // Enforce token validation
+    const token = (req.body?.token || req.query?.token || req.headers['x-join-token'] || '').trim();
+    if (!token) {
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid or missing join token. A valid invitation link is required.'
+      });
+    }
+
+    if (token !== room.joinToken && token !== room.joinCode) {
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid join token. You cannot enter without a valid room invitation link.'
       });
     }
 
@@ -379,18 +436,18 @@ router.post('/:roomId/join', protect, async (req, res, next) => {
       });
     }
 
-    const currentCount = room.participants ? room.participants.filter(p => p.status !== 'LEFT').length : (room.participantsCount || 0);
-    if (currentCount >= room.maxParticipants) {
+    const activeParticipants = (room.participants || []).filter(p => p.status !== 'LEFT');
+    if (activeParticipants.length >= room.maxParticipants) {
       return res.status(400).json({
         success: false,
         message: `Room ${room.roomId} has reached its maximum capacity of ${room.maxParticipants} candidates.`
       });
     }
 
-    // Authoritative Candidate Identity from req.user (Never trust client-submitted names/emails)
+    // Authoritative Candidate Identity from req.user
     const effectiveName = req.user.fullName || req.user.name || 'Registered Candidate';
     const effectiveEmail = req.user.email;
-    const effectiveId = String(req.user._id);
+    const effectiveId = String(req.user._id || req.user.id);
     const sessionMode = (room.mode || room.sessionType || 'EXAM').toUpperCase();
 
     // Unique authoritative Session ID
@@ -409,12 +466,17 @@ router.post('/:roomId/join', protect, async (req, res, next) => {
       status: 'ACTIVE',
       startTime: new Date(),
       trustScore: 100,
+      tabSwitchCount: 0,
+      maxTabSwitches: 3,
+      tabSwitchStatus: 'NORMAL',
+      tabSwitchEvents: [],
       warningLimit: room.warningLimit || 5,
       criticalLimit: room.criticalLimit || 3,
       suspensionLimit: room.suspensionLimit || 1,
     });
 
     // Update Room Participants in MongoDB
+    if (!room.participants) room.participants = [];
     const existingIndex = room.participants.findIndex(p => p.id === effectiveId || p.email === effectiveEmail);
     const participantData = {
       id: effectiveId,
@@ -425,11 +487,15 @@ router.post('/:roomId/join', protect, async (req, res, next) => {
       riskScore: 0,
       riskLevel: 'NORMAL',
       violations: 0,
+      tabSwitchCount: 0,
+      maxTabSwitches: 3,
+      tabSwitchStatus: 'NORMAL',
       liveness: 'LIVE',
       faceDetected: true,
       gaze: 'center',
       pose: 'Looking Straight',
       phoneDetected: false,
+      identityStatus: 'VERIFIED',
       joinedAt: new Date(),
     };
 
@@ -442,26 +508,41 @@ router.post('/:roomId/join', protect, async (req, res, next) => {
     room.participantsCount = room.participants.filter(p => p.status !== 'LEFT').length;
     await room.save();
 
-    // Emit Socket.IO updates to proctor host room
+    // Emit Socket.IO updates to proctor host room and to room owner's channel
     const io = req.app.get('io');
+    const ownerId = room.ownerId || room.createdBy || room.hostUserId || room.host?.id;
+
     if (io) {
       const payload = {
         roomId: room.roomId,
         sessionId,
+        studentId: effectiveId,
+        studentName: effectiveName,
         candidate: participantData,
         participantsCount: room.participantsCount,
         participants: room.participants,
       };
+
+      io.to(`proctor:${room.roomId}`).emit('STUDENT_JOINED', payload);
       io.to(`proctor:${room.roomId}`).emit('participant_joined', payload);
+      io.to(`room_${room.roomId}`).emit('STUDENT_JOINED', payload);
       io.to(`room_${room.roomId}`).emit('participant_joined', payload);
-      io.to(`proctor:${room.roomId}`).emit('room_participants_updated', {
+
+      const updatePayload = {
+        roomId: room.roomId,
         participantsCount: room.participantsCount,
         participants: room.participants,
-      });
-      io.to(`room_${room.roomId}`).emit('room_participants_updated', {
-        participantsCount: room.participantsCount,
-        participants: room.participants,
-      });
+      };
+
+      io.to(`proctor:${room.roomId}`).emit('room_participants_updated', updatePayload);
+      io.to(`room_${room.roomId}`).emit('room_participants_updated', updatePayload);
+
+      // Direct notification to the room owner's personal channel
+      if (ownerId) {
+        io.to(`user:${ownerId}`).emit('STUDENT_JOINED', payload);
+        io.to(`user:${ownerId}`).emit('participant_joined', payload);
+        io.to(`user:${ownerId}`).emit('room_participants_updated', updatePayload);
+      }
     }
 
     res.json({
@@ -472,6 +553,7 @@ router.post('/:roomId/join', protect, async (req, res, next) => {
       room: {
         ...room.toObject(),
         id: room.roomId,
+        participantsCount: room.participantsCount,
       },
       mode: sessionMode,
       candidate: participantData,
@@ -486,16 +568,17 @@ router.post('/:roomId/join', protect, async (req, res, next) => {
 // @route   POST /api/rooms/:roomId/leave
 // @desc    Candidate leaves room: update status and decrement active count
 // @access  Public / Private
-router.post('/:roomId/leave', async (req, res, next) => {
+router.post('/:roomId/leave', optionalProtect, async (req, res, next) => {
   try {
     const { roomId } = req.params;
     const { candidateId, sessionId } = req.body;
     const userId = candidateId || (req.user ? String(req.user._id || req.user.id) : null);
+    const cleanRoomId = (roomId || '').trim().toUpperCase();
 
     const room = await Room.findOne({
       $or: [
-        { roomId: roomId.toUpperCase() },
-        { joinCode: roomId.toUpperCase() }
+        { roomId: cleanRoomId },
+        { joinCode: cleanRoomId }
       ]
     });
 
@@ -513,20 +596,37 @@ router.post('/:roomId/leave', async (req, res, next) => {
       await room.save();
 
       const io = req.app.get('io');
+      const ownerId = room.ownerId || room.createdBy || room.hostUserId || room.host?.id;
+
       if (io) {
         const payload = {
           roomId: room.roomId,
           candidateId: userId,
+          studentId: userId,
           sessionId,
           participantsCount: room.participantsCount,
           participants: room.participants,
         };
+
+        io.to(`proctor:${room.roomId}`).emit('STUDENT_LEFT', payload);
         io.to(`proctor:${room.roomId}`).emit('participant_left', payload);
+        io.to(`room_${room.roomId}`).emit('STUDENT_LEFT', payload);
         io.to(`room_${room.roomId}`).emit('participant_left', payload);
-        io.to(`proctor:${room.roomId}`).emit('room_participants_updated', {
+
+        const updatePayload = {
+          roomId: room.roomId,
           participantsCount: room.participantsCount,
           participants: room.participants,
-        });
+        };
+
+        io.to(`proctor:${room.roomId}`).emit('room_participants_updated', updatePayload);
+        io.to(`room_${room.roomId}`).emit('room_participants_updated', updatePayload);
+
+        if (ownerId) {
+          io.to(`user:${ownerId}`).emit('STUDENT_LEFT', payload);
+          io.to(`user:${ownerId}`).emit('participant_left', payload);
+          io.to(`user:${ownerId}`).emit('room_participants_updated', updatePayload);
+        }
       }
     }
 
@@ -543,19 +643,38 @@ router.post('/:roomId/leave', async (req, res, next) => {
 // @route   POST /api/rooms/:roomId/end
 // @desc    Host ends room: mark room as ENDED, safely complete active sessions, notify participants
 // @access  Private / Public
-router.post('/:roomId/end', async (req, res, next) => {
+router.post('/:roomId/end', optionalProtect, async (req, res, next) => {
   try {
     const { roomId } = req.params;
+    const cleanRoomId = (roomId || '').trim().toUpperCase();
 
     const room = await Room.findOne({
       $or: [
-        { roomId: roomId.toUpperCase() },
-        { joinCode: roomId.toUpperCase() }
+        { roomId: cleanRoomId },
+        { joinCode: cleanRoomId }
       ]
     });
 
     if (!room) {
       return res.status(404).json({ success: false, message: 'Room not found' });
+    }
+
+    // If authenticated, ensure user is owner or admin
+    if (req.user) {
+      const uId = String(req.user._id || req.user.id);
+      const isOwner = (room.ownerId && room.ownerId === uId) ||
+                      (room.createdBy && room.createdBy === uId) ||
+                      (room.hostUserId && room.hostUserId === uId) ||
+                      (room.host?.id && room.host.id === uId) ||
+                      (room.host?.email && room.host.email === req.user.email);
+      const isAdmin = req.user.role === 'admin';
+
+      if (!isOwner && !isAdmin) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to end this room.'
+        });
+      }
     }
 
     room.status = 'ENDED';
@@ -571,11 +690,78 @@ router.post('/:roomId/end', async (req, res, next) => {
 
     // Mark active sessions for this room as COMPLETED
     await Session.updateMany(
-      { roomId: room.roomId, status: { $in: ['ACTIVE', 'LIVE', 'WARNING', 'READY'] } },
+      { roomId: room.roomId, status: { $in: ['ACTIVE', 'LIVE', 'WARNING', 'READY', 'MONITORING'] } },
       { $set: { status: 'COMPLETED', endTime: new Date() } }
     );
 
+    // Auto-generate/finalize student reports for room participant sessions
+    try {
+      const Report = require('../models/Report');
+      const Alert = require('../models/Alert');
+      if (room.participants && room.participants.length > 0) {
+        for (const p of room.participants) {
+          if (p.sessionId) {
+            const existingReport = await Report.findOne({ sessionId: p.sessionId });
+            if (!existingReport) {
+              const session = await Session.findOne({ sessionId: p.sessionId });
+              const alerts = await Alert.find({ sessionId: p.sessionId });
+              const phoneDetections = alerts.filter(a => a.type === 'PHONE_DETECTED' || a.type === 'MOBILE_PHONE_DETECTED').length;
+              const violationAlerts = alerts.filter(a => ['CRITICAL', 'HIGH', 'MEDIUM'].includes(String(a.severity).toUpperCase()));
+              let score = Math.max(0, Math.min(100, 100 - (phoneDetections * 25) - (violationAlerts.length * 5)));
+              const status = score < 60 ? 'FLAGGED' : score < 85 ? 'REVIEW_REQUIRED' : 'PASSED';
+              const riskLevel = score < 60 ? 'HIGH_RISK' : score < 85 ? 'MEDIUM_RISK' : 'NORMAL';
+              const timeline = alerts
+                .slice()
+                .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+                .map(a => ({
+                  timestamp: a.timestamp,
+                  eventType: a.eventType || a.type,
+                  severity: a.severity,
+                  description: a.evidence || a.description || '',
+                  confidence: a.confidence,
+                }));
+              await Report.create({
+                reportId: `RPT-${Date.now().toString().slice(-6)}`,
+                sessionId: p.sessionId,
+                roomId: room.roomId,
+                roomTitle: room.title,
+                candidateId: p.id,
+                userName: p.name || session?.userName || 'Candidate',
+                userEmail: p.email || session?.userEmail || '',
+                sessionType: room.mode || 'EXAM',
+                mode: room.mode || 'EXAM',
+                startTime: session?.startTime || p.joinedAt || new Date(),
+                endTime: room.endedAt,
+                durationSeconds: session?.startTime ? Math.max(0, Math.round((room.endedAt - new Date(session.startTime)) / 1000)) : 0,
+                overallIntegrityScore: score,
+                riskLevel,
+                totalViolations: violationAlerts.length,
+                phoneDetections,
+                identityMismatchCount: alerts.filter(a => a.type === 'IDENTITY_MISMATCH').length,
+                identityStatus: p.identityStatus || 'VERIFIED',
+                faceVerified: p.identityStatus === 'VERIFIED',
+                livenessPassed: p.liveness !== 'SPOOF',
+                alerts: alerts.map(a => ({
+                  type: a.type,
+                  eventType: a.eventType || a.type,
+                  severity: a.severity,
+                  evidence: a.evidence,
+                  timestamp: a.timestamp,
+                })),
+                timeline,
+                status,
+              });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[RoomEnd] Auto report generation notice:', err.message);
+    }
+
     const io = req.app.get('io');
+    const ownerId = room.ownerId || room.createdBy || room.hostUserId || room.host?.id;
+
     if (io) {
       const endPayload = {
         roomId: room.roomId,
@@ -583,10 +769,18 @@ router.post('/:roomId/end', async (req, res, next) => {
         message: 'The proctoring host has concluded this session.',
         endedAt: room.endedAt,
       };
+      io.to(`proctor:${room.roomId}`).emit('ROOM_ENDED', endPayload);
       io.to(`proctor:${room.roomId}`).emit('room_ended', endPayload);
+      io.to(`room_${room.roomId}`).emit('ROOM_ENDED', endPayload);
       io.to(`room_${room.roomId}`).emit('room_ended', endPayload);
       io.to(`proctor:${room.roomId}`).emit('SESSION_COMPLETED', endPayload);
       io.to(`room_${room.roomId}`).emit('SESSION_COMPLETED', endPayload);
+
+      if (ownerId) {
+        io.to(`user:${ownerId}`).emit('ROOM_ENDED', endPayload);
+        io.to(`user:${ownerId}`).emit('room_ended', endPayload);
+        io.to(`user:${ownerId}`).emit('SESSION_COMPLETED', endPayload);
+      }
     }
 
     res.json({

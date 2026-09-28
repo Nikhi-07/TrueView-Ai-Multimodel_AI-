@@ -59,32 +59,32 @@ class GazeVisualizer:
             return canvas
 
         # 1. Draw eye contours
-        GazeVisualizer._draw_eye_contour(canvas, eye_data["left_eye"])
-        GazeVisualizer._draw_eye_contour(canvas, eye_data["right_eye"])
+        is_closed = gaze_result.get("eyes_closed", False)
+        contour_color = (0, 0, 255) if is_closed else VIS_COLORS["eye_contour"]
+        GazeVisualizer._draw_eye_contour(canvas, eye_data["left_eye"], contour_color)
+        GazeVisualizer._draw_eye_contour(canvas, eye_data["right_eye"], contour_color)
 
-        # 2. Draw iris centers
-        GazeVisualizer._draw_iris_center(canvas, iris_data["left_iris"])
-        GazeVisualizer._draw_iris_center(canvas, iris_data["right_iris"])
+        # 2. Draw iris centers only when eyes are open (directional trajectory line removed)
+        if not is_closed:
+            GazeVisualizer._draw_iris_center(canvas, iris_data["left_iris"])
+            GazeVisualizer._draw_iris_center(canvas, iris_data["right_iris"])
 
-        # 3. Draw gaze direction arrow (from midpoint between eyes)
-        GazeVisualizer._draw_gaze_arrow(canvas, eye_data, gaze_result)
-
-        # 4. Draw focus indicator
+        # 3. Draw focus indicator
         GazeVisualizer._draw_focus_indicator(canvas, attention_result)
 
-        # 5. Draw info overlay
+        # 4. Draw info overlay
         GazeVisualizer._draw_info_overlay(canvas, gaze_result, attention_result)
 
         return canvas
 
     @staticmethod
-    def _draw_eye_contour(canvas: np.ndarray, eye: dict):
+    def _draw_eye_contour(canvas: np.ndarray, eye: dict, color=None):
         """Draw the eye contour as a closed polyline."""
         contour = eye["contour"]
         pts = np.array([(int(p[0]), int(p[1])) for p in contour], dtype=np.int32)
         cv2.polylines(
             canvas, [pts], isClosed=True,
-            color=VIS_COLORS["eye_contour"],
+            color=color or VIS_COLORS["eye_contour"],
             thickness=EYE_CONTOUR_THICKNESS,
         )
 
@@ -120,6 +120,8 @@ class GazeVisualizer:
             dy = -GAZE_ARROW_LENGTH
         elif direction == GazeDirection.DOWN:
             dy = GAZE_ARROW_LENGTH
+        elif direction == GazeDirection.UNKNOWN:
+            return
         else:
             # Center – draw a small circle instead of arrow
             cv2.circle(canvas, (mid_x, mid_y - 15), 5, VIS_COLORS["gaze_arrow"], 2)
@@ -148,6 +150,8 @@ class GazeVisualizer:
 
         if status == AttentionStatus.FOCUSED:
             color = VIS_COLORS["focus_indicator"]
+        elif status == AttentionStatus.BLINKING:
+            color = (0, 200, 255)  # Orange/amber
         elif status == AttentionStatus.DISTRACTED:
             color = VIS_COLORS["distracted_indicator"]
         else:
@@ -159,9 +163,20 @@ class GazeVisualizer:
 
     @staticmethod
     def _draw_info_overlay(canvas: np.ndarray, gaze_result: dict, attention_result: dict):
-        """Draw text overlay with gaze direction and attention info."""
-        direction = gaze_result.get("gaze_direction", "N/A").upper()
-        status = attention_result.get("attention_status", "N/A").upper()
+        """Draw text overlay with gaze direction, eye status, and attention info."""
+        direction = gaze_result.get("gaze_direction", "UNKNOWN")
+        if gaze_result.get("eyes_closed"):
+            direction = "UNKNOWN"
+        direction = str(direction).upper()
+
+        status = attention_result.get("attention_status", "N/A")
+        if status == "eyes_closed":
+            status_text = "EYES CLOSED"
+        elif status == "blinking":
+            status_text = "BLINKING"
+        else:
+            status_text = str(status).upper()
+
         score = attention_result.get("attention_score", 0)
 
         # Background box
@@ -171,7 +186,7 @@ class GazeVisualizer:
         # Text
         cv2.putText(canvas, f"Gaze: {direction}", (14, 28),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, VIS_COLORS["text_fg"], 1)
-        cv2.putText(canvas, f"Status: {status}", (14, 48),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, VIS_COLORS["text_fg"], 1)
+        cv2.putText(canvas, f"Status: {status_text}", (14, 48),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255) if status == "eyes_closed" else VIS_COLORS["text_fg"], 1)
         cv2.putText(canvas, f"Attention: {score:.0f}%", (14, 66),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, VIS_COLORS["iris_center"], 1)

@@ -16,6 +16,7 @@ const Session = require('../models/Session');
 const Alert = require('../models/Alert');
 const Report = require('../models/Report');
 const User = require('../models/User');
+const Room = require('../models/Room');
 const { POLICY_THRESHOLDS, evaluateEventSeverity } = require('../utils/sessionPolicies');
 
 const activeSessions = new Map();
@@ -41,8 +42,10 @@ const canControlSession = (socket) => Boolean(socket.authUser && socket.authUser
 
 const VALID_EVENT_TYPES = new Set([
   'CAMERA_INTERRUPTED', 'MICROPHONE_INTERRUPTED', 'MULTIPLE_FACES_DETECTED', 'MULTIPLE_PERSONS',
-  'PHONE_DETECTED', 'UNAUTHORIZED_OBJECT', 'IDENTITY_MISMATCH', 'UNKNOWN_SPEAKER', 'MULTIPLE_SPEAKERS',
+  'MULTIPLE_PEOPLE_DETECTED', 'PHONE_DETECTED', 'MOBILE_PHONE_DETECTED', 'UNAUTHORIZED_OBJECT',
+  'IDENTITY_MISMATCH', 'POSSIBLE_USER_REPLACEMENT', 'UNKNOWN_SPEAKER', 'MULTIPLE_SPEAKERS',
   'GAZE_DEVIATION', 'LOOKING_AWAY', 'OFFSCREEN_GLANCE', 'REPEATED_DISTRACTION', 'PROLONGED_DISTRACTION',
+  'EYES_CLOSED', 'HEAD_TURNED', 'HEAD_MOVEMENT',
   'USER_ABSENT', 'NO_FACE_DETECTED', 'VOICE_DETECTED', 'SPEECH_DETECTED',
   'REGISTERED_SPEAKER', 'NO_VOICE', 'HIGH_BACKGROUND_NOISE', 'VOICE_INTERRUPTED', 'LOW_LIGHT',
   'BLURRY_FRAME', 'CRITICAL_RISK_THRESHOLD', 'AI_ENGINE_OFFLINE', 'MONITORING_THRESHOLD_EXCEEDED',
@@ -50,6 +53,7 @@ const VALID_EVENT_TYPES = new Set([
   'SPEECH_CONTENT_EVENT', 'WEBRTC_CONNECTION_OPEN', 'WEBRTC_CONNECTION_CLOSED',
   // Event lifecycle (DETECTED -> CLEARED) types emitted by the AI engine
   'PHONE_CLEARED', 'MULTIPLE_PERSONS_CLEARED', 'FACE_PRESENT', 'GAZE_CLEARED', 'SPEECH_STOPPED',
+  'EYES_OPEN', 'HEAD_POSITION_NORMAL', 'LIVENESS_CONFIRMED',
   'SPOOF_DETECTED', 'SPEAKING_DETECTED',
 ]);
 
@@ -59,18 +63,23 @@ const VALID_EVENT_TYPES = new Set([
 // (never delaying or duplicating), and a CLEARED event closes the lifecycle.
 // One-shot/informational events (joins, voice registration, WebRTC) always emit.
 const LIFECYCLE_EVENTS = new Map([
-  ['PHONE_DETECTED', 'phone'], ['PHONE_CLEARED', 'phone'],
-  ['MULTIPLE_FACES_DETECTED', 'multiple_faces'], ['MULTIPLE_PERSONS', 'multiple_faces'], ['MULTIPLE_PERSONS_CLEARED', 'multiple_faces'],
+  ['PHONE_DETECTED', 'phone'], ['MOBILE_PHONE_DETECTED', 'phone'], ['PHONE_CLEARED', 'phone'],
+  ['MULTIPLE_FACES_DETECTED', 'multiple_faces'], ['MULTIPLE_PERSONS', 'multiple_faces'], ['MULTIPLE_PEOPLE_DETECTED', 'multiple_faces'], ['MULTIPLE_PERSONS_CLEARED', 'multiple_faces'],
   ['NO_FACE_DETECTED', 'no_face'], ['USER_ABSENT', 'no_face'], ['FACE_PRESENT', 'no_face'],
   ['GAZE_DEVIATION', 'gaze'], ['LOOKING_AWAY', 'gaze'], ['PROLONGED_DISTRACTION', 'gaze'],
   ['REPEATED_DISTRACTION', 'gaze'], ['OFFSCREEN_GLANCE', 'gaze'], ['GAZE_CLEARED', 'gaze'],
+  ['EYES_CLOSED', 'eyes'], ['EYES_OPEN', 'eyes'],
+  ['HEAD_TURNED', 'head_pose'], ['HEAD_MOVEMENT', 'head_pose'], ['HEAD_POSITION_NORMAL', 'head_pose'],
   ['SPEECH_DETECTED', 'speaking'], ['SPEAKING_DETECTED', 'speaking'], ['VOICE_DETECTED', 'speaking'], ['SPEECH_STOPPED', 'speaking'],
   ['UNAUTHORIZED_OBJECT', 'object'],
-  ['LIVENESS_FAILED', 'liveness'], ['ACTIVE_CHALLENGE_FAILED', 'liveness'], ['SPOOF_DETECTED', 'liveness'],
-  ['IDENTITY_MISMATCH', 'identity'],
+  ['LIVENESS_FAILED', 'liveness'], ['ACTIVE_CHALLENGE_FAILED', 'liveness'], ['SPOOF_DETECTED', 'liveness'], ['LIVENESS_CONFIRMED', 'liveness'],
+  ['IDENTITY_MISMATCH', 'identity'], ['POSSIBLE_USER_REPLACEMENT', 'identity'],
   ['UNKNOWN_SPEAKER', 'speaker'], ['MULTIPLE_SPEAKERS', 'speaker'],
 ]);
-const CLEAR_EVENTS = new Set(['PHONE_CLEARED', 'MULTIPLE_PERSONS_CLEARED', 'FACE_PRESENT', 'GAZE_CLEARED', 'SPEECH_STOPPED']);
+const CLEAR_EVENTS = new Set([
+  'PHONE_CLEARED', 'MULTIPLE_PERSONS_CLEARED', 'FACE_PRESENT', 'GAZE_CLEARED', 'SPEECH_STOPPED',
+  'EYES_OPEN', 'HEAD_POSITION_NORMAL', 'LIVENESS_CONFIRMED'
+]);
 
 // Priority classes: P0 (critical) through P3 (low). Used by the frontend to order
 // the live alert stack; critical events always surface first.
@@ -143,25 +152,39 @@ function getOrCreateSessionState(sessionId, initialMode = 'EXAM', sessionDuratio
 // ── Best-effort Mongo persistence ──────────────────────────────────
 async function persistSession(session) {
   try {
+    const candidateParticipant = session.participants?.find((p) => p.role === 'participant') || session.participants?.[0];
+    const updateData = {
+      sessionId: session.sessionId,
+      mode: session.sessionType,
+      sessionType: session.sessionType,
+      status: session.status,
+      cameraStatus: session.cameraStatus,
+      microphoneStatus: session.microphoneStatus,
+      trustScore: session.trustScore,
+      warningLimit: session.warningLimit,
+      criticalLimit: session.criticalLimit,
+      suspensionLimit: session.suspensionLimit,
+      suspensionReason: session.suspensionReason,
+      startTime: session.startedAt || new Date(),
+      endTime: session.endedAt,
+      totalAlerts: session.alertCount,
+      criticalAlertsCount: session.criticalAlertCount,
+    };
+    if (session.roomId) updateData.roomId = session.roomId;
+    if (session.roomTitle) updateData.roomTitle = session.roomTitle;
+    if (session.userId || candidateParticipant?.id) {
+      updateData.userId = session.userId || candidateParticipant.id;
+    }
+    if (session.userName || candidateParticipant?.name) {
+      updateData.userName = session.userName || candidateParticipant.name;
+    }
+    if (session.userEmail || candidateParticipant?.email) {
+      updateData.userEmail = session.userEmail || candidateParticipant.email;
+    }
+
     await Session.findOneAndUpdate(
       { sessionId: session.sessionId },
-      {
-        sessionId: session.sessionId,
-        mode: session.sessionType,
-        sessionType: session.sessionType,
-        status: session.status,
-        cameraStatus: session.cameraStatus,
-        microphoneStatus: session.microphoneStatus,
-        trustScore: session.trustScore,
-        warningLimit: session.warningLimit,
-        criticalLimit: session.criticalLimit,
-        suspensionLimit: session.suspensionLimit,
-        suspensionReason: session.suspensionReason,
-        startTime: session.startedAt || new Date(),
-        endTime: session.endedAt,
-        totalAlerts: session.alertCount,
-        criticalAlertsCount: session.criticalAlertCount,
-      },
+      { $set: updateData },
       { upsert: true, setDefaultsOnInsert: true }
     );
   } catch (e) {
@@ -239,12 +262,22 @@ async function generateSessionReport(session, opts = {}) {
         confidence: a.confidence,
       }));
 
+    const candidateParticipant = session.participants?.find((p) => p.role === 'participant') || session.participants?.[0];
+    const candidateName = session.userName || candidateParticipant?.name || 'Participant';
+    const candidateEmail = session.userEmail || candidateParticipant?.email || '';
+    const candidateId = session.userId || candidateParticipant?.id || null;
+    const effectiveRoomId = session.roomId || (session.sessionId?.startsWith('TRV-') ? (session.sessionId.startsWith('TRV-TRV-') ? session.sessionId.split('-').slice(1, 3).join('-') : session.sessionId.split('-').slice(0, 2).join('-')) : null);
+
     const payload = {
       reportId: `RPT-${Date.now().toString().slice(-6)}`,
       sessionId: session.sessionId,
-      userName: session.participants[0]?.name || 'Participant',
-      userEmail: session.participants[0]?.email || '',
+      roomId: effectiveRoomId,
+      roomTitle: session.roomTitle || null,
+      candidateId,
+      userName: candidateName,
+      userEmail: candidateEmail,
       sessionType: session.sessionType || 'EXAM',
+      mode: session.sessionType || 'EXAM',
       durationSeconds,
       startTime: session.startedAt,
       endTime: session.endedAt,
@@ -321,6 +354,19 @@ function initProctorSocket(io) {
   io.on('connection', (socket) => {
     console.log(`[ProctorSocket] Client connected: ${socket.id}`);
 
+    if (socket.authUser && socket.authUser.id) {
+      socket.join(`user:${socket.authUser.id}`);
+      console.log(`[ProctorSocket] Socket ${socket.id} joined personal room user:${socket.authUser.id}`);
+    }
+
+    socket.on('subscribe_user_dashboard', ({ userId }) => {
+      const effectiveId = socket.authUser ? socket.authUser.id : (userId ? String(userId) : null);
+      if (effectiveId) {
+        socket.join(`user:${effectiveId}`);
+        console.log(`[ProctorSocket] Socket ${socket.id} subscribed to user:${effectiveId}`);
+      }
+    });
+
     // Join Proctor Room
     socket.on('join_room', ({ sessionId, roomId, role, user, sessionType, sessionDuration }) => {
       const extractedRoomId = roomId || (sessionId && sessionId.startsWith('TRV-') ? sessionId.split('-').slice(0, 2).join('-') : null);
@@ -357,6 +403,10 @@ function initProctorSocket(io) {
 
         // Inform the room a participant joined (evidence-based, not accusatory)
         if (socket.role === 'participant') {
+          sessionState.userId = displayUser.id || socket.id;
+          sessionState.userName = displayUser.name || 'Participant';
+          sessionState.userEmail = displayUser.email || '';
+          persistSession(sessionState);
           const joinAlert = {
             eventId: makeEventId(),
             sessionId,
@@ -518,9 +568,44 @@ function initProctorSocket(io) {
       }
     });
 
+    socket.on('join-session', ({ sessionId, roomId }) => {
+      const targetSessionId = sessionId || socket.sessionId;
+      if (targetSessionId) {
+        socket.join(`room_${targetSessionId}`);
+        socket.join(`session:${targetSessionId}`);
+        socket.sessionId = targetSessionId;
+        console.log(`[ProctorSocket] Client ${socket.id} joined session:${targetSessionId}`);
+      }
+    });
+    socket.on('join_session', ({ sessionId, roomId }) => {
+      const targetSessionId = sessionId || socket.sessionId;
+      if (targetSessionId) {
+        socket.join(`room_${targetSessionId}`);
+        socket.join(`session:${targetSessionId}`);
+        socket.sessionId = targetSessionId;
+        console.log(`[ProctorSocket] Client ${socket.id} joined session:${targetSessionId}`);
+      }
+    });
+
     // AI Event Received – severity is recomputed server-side
-    socket.on('ai_event', (eventData) => {
-      const { sessionId, eventType, confidence = 0.85, description, evidence, captureTimestamp, state } = eventData;
+    const handleAiEvent = (eventData) => {
+      if (!eventData || typeof eventData !== 'object') return;
+      const {
+        sessionId: rawSessionId,
+        eventType,
+        type,
+        confidence = 0.85,
+        description,
+        message,
+        evidence,
+        captureTimestamp,
+        state,
+        category,
+        source,
+        metadata
+      } = eventData;
+
+      const sessionId = rawSessionId || socket.sessionId;
       // Only sockets that joined THIS room may inject events into it (prevents
       // cross-session alert pollution from arbitrary sockets).
       if (!sessionId || socket.sessionId !== sessionId) {
@@ -535,7 +620,8 @@ function initProctorSocket(io) {
         return;
       }
 
-      const normalizedType = String(eventType || 'UNKNOWN_EVENT').toUpperCase();
+      const rawType = eventType || type || 'UNKNOWN_EVENT';
+      const normalizedType = String(rawType).toUpperCase();
       // NEVER trust the client-provided severity: compute from session policy.
       const severity = VALID_EVENT_TYPES.has(normalizedType)
         ? evaluateEventSeverity(normalizedType, session.sessionType)
@@ -588,17 +674,23 @@ function initProctorSocket(io) {
       // Participant identity is derived from the socket's join record — a
       // client-supplied participantId is never trusted.
       const joinedParticipant = session.participants.find((p) => p.socketId === socket.id);
+      const rawEvidence = evidence || message || description || `AI detected ${normalizedType}`;
       const newAlert = {
         eventId,
+        id: eventId,
         sessionId,
         participantId: (joinedParticipant && joinedParticipant.id) || socket.id,
         timestamp: new Date().toISOString(),
         eventType: normalizedType,
+        type: normalizedType,
+        category: category || 'BEHAVIOUR',
+        source: source || 'AI_ENGINE',
         severity: resolving && severity === 'LOW' ? 'INFO' : severity,
         priority: meta.priority,
         confidence: Math.max(0, Math.min(1, Number(confidence) || 0)),
-        description: description || `AI detected ${normalizedType}`,
-        evidence: evidence || '',
+        description: description || message || rawEvidence,
+        message: message || description || rawEvidence,
+        evidence: rawEvidence,
         status: resolving ? 'CLEARED' : 'OPEN',
         state: resolving ? 'RESOLVED' : 'DETECTED',
         captureTimestamp: Number(captureTimestamp) || undefined,
@@ -606,6 +698,7 @@ function initProctorSocket(io) {
         alertCreatedTimestamp: meta.alertCreatedTimestamp,
         socketEmittedTimestamp: meta.socketEmittedTimestamp,
         stale: meta.stale,
+        metadata: metadata || {},
       };
 
       session.alerts.unshift(newAlert);
@@ -649,19 +742,45 @@ function initProctorSocket(io) {
         confidence: newAlert.confidence,
       };
 
+      const canonicalProctorEvent = {
+        id: eventId,
+        sessionId,
+        timestamp: newAlert.timestamp,
+        type: normalizedType,
+        eventType: normalizedType,
+        category: category || 'BEHAVIOUR',
+        severity: newAlert.severity,
+        confidence: newAlert.confidence,
+        source: source || 'AI_ENGINE',
+        message: newAlert.message,
+        evidence: newAlert.evidence,
+        state: newAlert.state,
+        status: newAlert.status,
+        riskScore,
+        riskLevel,
+        metadata: metadata || {}
+      };
+
       const roomName = `room_${sessionId}`;
+      io.to(roomName).emit('proctor:event', canonicalProctorEvent);
+      io.to(`session:${sessionId}`).emit('proctor:event', canonicalProctorEvent);
       io.to(roomName).emit('AI_EVENT', newAlert);
       io.to(`session:${sessionId}`).emit('AI_EVENT', newAlert);
       io.to(roomName).emit('ALERT_CREATED', newAlert);
       io.to(`session:${sessionId}`).emit('ALERT_CREATED', newAlert);
+      io.to(roomName).emit('proctor_alert', proctorAlertPayload);
+      io.to(`session:${sessionId}`).emit('proctor_alert', proctorAlertPayload);
       io.to(roomName).emit('TRUST_SCORE_UPDATED', { trustScore: session.trustScore });
       io.to(`session:${sessionId}`).emit('TRUST_SCORE_UPDATED', { trustScore: session.trustScore });
+      io.to(roomName).emit('RISK_SCORE_UPDATED', { riskScore, riskLevel });
+      io.to(`session:${sessionId}`).emit('RISK_SCORE_UPDATED', { riskScore, riskLevel });
 
       if (effectiveRoomId) {
         io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', proctorAlertPayload);
         io.to(`room:proctor:${effectiveRoomId}`).emit('proctor_alert', proctorAlertPayload);
         io.to(`room_${effectiveRoomId}`).emit('proctor_alert', proctorAlertPayload);
         io.to(`proctor:${effectiveRoomId}`).emit('AI_EVENT', newAlert);
+        io.to(`proctor:${effectiveRoomId}`).emit('proctor:event', canonicalProctorEvent);
         io.to(`proctor:${effectiveRoomId}`).emit('participant_risk_updated', {
           roomId: effectiveRoomId,
           sessionId,
@@ -716,7 +835,12 @@ function initProctorSocket(io) {
 
         io.to(roomName).emit('SESSION_STATE_CHANGED', { status: 'SUSPENDED', session });
       }
-    });
+    };
+
+    socket.on('ai_event', handleAiEvent);
+    socket.on('proctor:event', handleAiEvent);
+    socket.on('proctor_alert', handleAiEvent);
+    socket.on('alert', handleAiEvent);
 
     // Reviewer Action Controls & Voice Commands – SERVER-AUTHORITATIVE ROLE CHECK
     socket.on('reviewer_command', ({ sessionId, command, payload }) => {
@@ -840,25 +964,31 @@ function initProctorSocket(io) {
     });
 
     // Leave Room / Disconnect
-    socket.on('disconnect', () => {
-      if (socket.sessionId) {
-        const session = activeSessions.get(socket.sessionId);
+    socket.on('disconnect', async () => {
+      const sessionId = socket.sessionId;
+      const effectiveRoomId = socket.roomId || (sessionId && sessionId.startsWith('TRV-') ? (sessionId.startsWith('TRV-TRV-') ? sessionId.split('-').slice(1, 3).join('-') : sessionId.split('-').slice(0, 2).join('-')) : null);
+
+      if (sessionId) {
+        const session = activeSessions.get(sessionId);
         if (session) {
           const leaving = session.participants.find((p) => p.socketId === socket.id);
           session.participants = session.participants.filter((p) => p.socketId !== socket.id);
 
-          // Evidence-based event: a participant leaving mid-session is recorded,
-          // but the server never accuses anyone (policy decides severity).
-          if (leaving && leaving.role === 'participant' && session.status === 'LIVE') {
+          // Evidence-based event: a participant leaving mid-session is recorded
+          if (leaving && leaving.role === 'participant') {
             const leftAlert = {
               eventId: makeEventId(),
               sessionId: session.sessionId,
+              roomId: effectiveRoomId,
               participantId: leaving.id,
+              candidateName: leaving.name || 'Participant',
               timestamp: new Date().toISOString(),
               eventType: 'PARTICIPANT_LEFT',
+              type: 'PARTICIPANT_LEFT',
               severity: evaluateEventSeverity('PARTICIPANT_LEFT', session.sessionType) || 'LOW',
               confidence: 1.0,
-              description: `${leaving.name || 'Participant'} disconnected from the monitored session (refresh, close, or network loss).`,
+              description: `${leaving.name || 'Participant'} disconnected from the monitored session.`,
+              message: `${leaving.name || 'Participant'} disconnected from the monitored session.`,
               status: 'OPEN',
               state: 'DETECTED',
               ...buildAlertMeta(),
@@ -868,14 +998,73 @@ function initProctorSocket(io) {
             if (session.alerts.length > 200) session.alerts.pop();
             session.alertCount += 1;
             persistAlert(leftAlert);
+
             io.to(`room_${session.sessionId}`).emit('AI_EVENT', leftAlert);
+            io.to(`session:${session.sessionId}`).emit('AI_EVENT', leftAlert);
             io.to(`room_${session.sessionId}`).emit('ALERT_CREATED', leftAlert);
+            io.to(`session:${session.sessionId}`).emit('ALERT_CREATED', leftAlert);
+
+            if (effectiveRoomId) {
+              const leftPayload = {
+                roomId: effectiveRoomId,
+                sessionId: session.sessionId,
+                candidateId: leaving.id,
+                name: leaving.name,
+                status: 'LEFT',
+                reason: 'DISCONNECTED',
+                timestamp: new Date().toISOString(),
+              };
+              io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', leftAlert);
+              io.to(`room_${effectiveRoomId}`).emit('proctor_alert', leftAlert);
+              io.to(`room:proctor:${effectiveRoomId}`).emit('proctor_alert', leftAlert);
+              io.to(`proctor:${effectiveRoomId}`).emit('participant_left', leftPayload);
+              io.to(`room_${effectiveRoomId}`).emit('participant_left', leftPayload);
+              io.to(`room:proctor:${effectiveRoomId}`).emit('participant_left', leftPayload);
+            }
           }
 
           io.to(`room_${socket.sessionId}`).emit('room_participants_updated', {
             participantsCount: session.participants.length,
             participants: session.participants,
           });
+
+          if (effectiveRoomId) {
+            io.to(`proctor:${effectiveRoomId}`).emit('room_participants_updated', {
+              participantsCount: session.participants.length,
+              participants: session.participants,
+            });
+            io.to(`room_${effectiveRoomId}`).emit('room_participants_updated', {
+              participantsCount: session.participants.length,
+              participants: session.participants,
+            });
+
+            // Update participant in MongoDB Room
+            try {
+              const updatedRoom = await Room.findOneAndUpdate(
+                {
+                  $or: [
+                    { roomId: effectiveRoomId.toUpperCase() },
+                    { joinCode: effectiveRoomId.toUpperCase() }
+                  ],
+                  'participants.id': leaving?.id
+                },
+                { $set: { 'participants.$.status': 'LEFT', 'participants.$.leftAt': new Date() } },
+                { new: true }
+              );
+              if (updatedRoom) {
+                updatedRoom.participantsCount = updatedRoom.participants.filter(p => p.status !== 'LEFT').length;
+                await updatedRoom.save();
+                io.to(`proctor:${effectiveRoomId}`).emit('room_participants_updated', {
+                  participantsCount: updatedRoom.participantsCount,
+                  participants: updatedRoom.participants,
+                });
+                io.to(`room_${effectiveRoomId}`).emit('room_participants_updated', {
+                  participantsCount: updatedRoom.participantsCount,
+                  participants: updatedRoom.participants,
+                });
+              }
+            } catch (_) {}
+          }
         }
       }
       console.log(`[ProctorSocket] Client disconnected: ${socket.id}`);

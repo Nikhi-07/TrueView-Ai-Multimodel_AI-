@@ -191,17 +191,26 @@ export default function useControlledMediaStream({
     };
   }, [cameraStatus, microphoneStatus, triggerCameraInterruption, triggerMicrophoneInterruption]);
 
-  // Auto-start on mount if specified
+  // Auto-start on mount if specified and ensure clean shutdown on unmount
   useEffect(() => {
     if (autoStart) {
       startStream();
     }
+    const handleBeforeUnload = () => {
+      stopStream();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+
     return () => {
       if (healthCheckIntervalRef.current) {
         clearInterval(healthCheckIntervalRef.current);
       }
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+      stopStream();
     };
-  }, [autoStart, startStream]);
+  }, [autoStart, startStream, stopStream]);
 
   return {
     stream,

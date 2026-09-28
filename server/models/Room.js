@@ -20,8 +20,25 @@ const participantSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['WAITING', 'VERIFYING', 'MONITORING', 'SUSPENDED', 'COMPLETED', 'LEFT'],
+      enum: ['WAITING', 'VERIFYING', 'MONITORING', 'SUSPENDED', 'COMPLETED', 'LEFT', 'DISCONNECTED', 'TERMINATED'],
       default: 'WAITING',
+    },
+    tabSwitchCount: {
+      type: Number,
+      default: 0,
+    },
+    maxTabSwitches: {
+      type: Number,
+      default: 3,
+    },
+    tabSwitchStatus: {
+      type: String,
+      enum: ['NORMAL', 'WARNING', 'FINAL_WARNING', 'TERMINATED'],
+      default: 'NORMAL',
+    },
+    terminationReason: {
+      type: String,
+      default: null,
     },
     riskScore: {
       type: Number,
@@ -98,6 +115,27 @@ const roomSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+    },
+    ownerId: {
+      type: String,
+      required: true,
+      index: true,
+    },
+    ownerName: {
+      type: String,
+      default: 'Session Host',
+    },
+    ownerEmail: {
+      type: String,
+      default: '',
+    },
+    createdBy: {
+      type: String,
+      index: true,
+    },
+    hostUserId: {
+      type: String,
+      index: true,
     },
     host: {
       id: { type: String, default: 'host_01' },

@@ -14,6 +14,7 @@ const DIRECTION_ANGLES = {
   down: 90,
   left: 180,
   right: 0,
+  unknown: null,
 };
 
 const DIRECTION_LABELS = {
@@ -22,16 +23,18 @@ const DIRECTION_LABELS = {
   down: 'DOWN',
   left: 'LEFT',
   right: 'RIGHT',
+  unknown: 'UNKNOWN',
 };
 
 export default function GazeDirectionIndicator({ direction = 'center', confidence = 0, className }) {
   const angle = DIRECTION_ANGLES[direction];
   const isCenter = direction === 'center';
+  const isUnknown = direction === 'unknown';
   const label = DIRECTION_LABELS[direction] || 'N/A';
 
   // Color based on direction
-  const dirColor = isCenter ? '#10b981' : '#f59e0b';
-  const glowColor = isCenter ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)';
+  const dirColor = isCenter ? '#10b981' : isUnknown ? '#f43f5e' : '#f59e0b';
+  const glowColor = isCenter ? 'rgba(16, 185, 129, 0.3)' : isUnknown ? 'rgba(244, 63, 94, 0.3)' : 'rgba(245, 158, 11, 0.3)';
 
   return (
     <div className={cn('flex flex-col items-center', className)}>

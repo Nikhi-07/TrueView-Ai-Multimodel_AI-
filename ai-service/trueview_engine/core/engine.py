@@ -60,6 +60,9 @@ from trueview_engine.config.thresholds import (
     TEMPORAL_WINDOW_NO_FACE,
     TEMPORAL_WINDOW_LOOKING_AWAY,
     TEMPORAL_WINDOW_SPEAKING,
+    TEMPORAL_WINDOW_EYES_CLOSED,
+    TEMPORAL_WINDOW_HEAD_TURN,
+    TEMPORAL_WINDOW_SPOOF,
 )
 
 
@@ -242,12 +245,47 @@ class TrueViewEngine:
             0.85, "Voice activity detected.", TEMPORAL_WINDOW_SPEAKING, quality_eval
         )
 
+        # Gaze & Eyes checks
+        gaze_data = fused_features.get("gaze", {})
+        is_eyes_closed = bool(gaze_data.get("eyes_closed", False))
+        st_eyes = self.event_state_machine.update_condition(
+            session_id, "eyes_closed", is_eyes_closed,
+            0.90, "Candidate eyes appear closed beyond normal blink threshold.", TEMPORAL_WINDOW_EYES_CLOSED, quality_eval
+        )
+
+        # Head Pose checks
+        pose_data = fused_features.get("head_pose", {})
+        yaw = abs(pose_data.get("yaw", 0.0))
+        pitch = abs(pose_data.get("pitch", 0.0))
+        is_head_turned = yaw > 25.0
+        st_head_turned = self.event_state_machine.update_condition(
+            session_id, "head_turned", is_head_turned,
+            0.88, f"Candidate head turned persistently (yaw: {yaw:.1f}°).", TEMPORAL_WINDOW_HEAD_TURN, quality_eval
+        )
+        is_head_mov = pitch > 20.0
+        st_head_mov = self.event_state_machine.update_condition(
+            session_id, "head_movement", is_head_mov,
+            0.85, f"Candidate head tilted excessively (pitch: {pitch:.1f}°).", TEMPORAL_WINDOW_HEAD_TURN, quality_eval
+        )
+
+        # Liveness / Anti-spoof check
+        liv_data = fused_features.get("liveness", {})
+        is_spoof = not bool(liv_data.get("is_live", True))
+        st_spoof = self.event_state_machine.update_condition(
+            session_id, "spoof", is_spoof,
+            float(liv_data.get("p_spoof", 0.90)), "Presentation attack / biometric spoof detected.", TEMPORAL_WINDOW_SPOOF, quality_eval
+        )
+
         confirmed_states = {
             "phone": st_phone,
             "multiple_persons": st_multi,
             "no_face": st_no_face,
             "looking_away": st_dist,
             "speaking": st_speak,
+            "eyes_closed": st_eyes,
+            "head_turned": st_head_turned,
+            "head_movement": st_head_mov,
+            "spoof": st_spoof,
         }
         timings["confirmation"] = round((time.time() - t_mark) * 1000, 1)
         t_mark = time.time()
@@ -260,27 +298,40 @@ class TrueViewEngine:
         prev_confirmed = self._prev_confirmed.get(session_id, {})
         cleared_events: List[Dict[str, Any]] = []
         cleared_map = {
-            "phone": ("PHONE_CLEARED", "Mobile phone no longer detected in camera view."),
-            "multiple_persons": ("MULTIPLE_PERSONS_CLEARED", "Scene returned to a single person in camera view."),
-            "no_face": ("FACE_PRESENT", "Candidate face is visible again."),
-            "looking_away": ("GAZE_CLEARED", "Candidate attention returned to the screen."),
-            "speaking": ("SPEECH_STOPPED", "Voice activity stopped."),
+            "phone": ("PHONE_CLEARED", "PROHIBITED_OBJECT", "Mobile phone no longer detected in camera view."),
+            "multiple_persons": ("MULTIPLE_PERSONS_CLEARED", "OBJECT_DETECTION", "Scene returned to a single person in camera view."),
+            "no_face": ("FACE_PRESENT", "PRESENCE", "Candidate face is visible again."),
+            "looking_away": ("GAZE_CLEARED", "GAZE", "Candidate attention returned to the screen."),
+            "speaking": ("SPEECH_STOPPED", "AUDIO", "Voice activity stopped."),
+            "eyes_closed": ("EYES_OPEN", "GAZE", "Candidate eyes opened."),
+            "head_turned": ("HEAD_POSITION_NORMAL", "HEAD_POSE", "Candidate head position returned to center."),
+            "head_movement": ("HEAD_POSITION_NORMAL", "HEAD_POSE", "Candidate head pitch returned to normal."),
+            "spoof": ("LIVENESS_CONFIRMED", "BIOMETRIC", "Liveness verified."),
         }
         for key, st in confirmed_states.items():
             was_confirmed = bool(prev_confirmed.get(key, {}).get("confirmed"))
             if was_confirmed and not st.get("confirmed"):
-                cleared_type, cleared_evidence = cleared_map[key]
-                cleared_events.append({
-                    "event_id": f"evt_{uuid.uuid4().hex[:8]}",
-                    "session_id": session_id,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "type": cleared_type,
-                    "severity": "LOW",
-                    "confidence": prev_confirmed[key].get("confidence", 0.85),
-                    "duration": prev_confirmed[key].get("duration", 0.0),
-                    "evidence": cleared_evidence,
-                    "state": "RESOLVED",
-                })
+                if key in cleared_map:
+                    cleared_type, cleared_cat, cleared_evidence = cleared_map[key]
+                    evt_uuid = f"evt_{uuid.uuid4().hex[:8]}"
+                    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    cleared_events.append({
+                        "id": evt_uuid,
+                        "event_id": evt_uuid,
+                        "session_id": session_id,
+                        "sessionId": session_id,
+                        "timestamp": now_iso,
+                        "type": cleared_type,
+                        "category": cleared_cat,
+                        "severity": "LOW",
+                        "confidence": prev_confirmed[key].get("confidence", 0.85),
+                        "duration": prev_confirmed[key].get("duration", 0.0),
+                        "evidence": cleared_evidence,
+                        "message": cleared_evidence,
+                        "source": "LIFECYCLE",
+                        "state": "RESOLVED",
+                        "metadata": {"cleared_key": key}
+                    })
         self._prev_confirmed[session_id] = {
             key: {"confirmed": bool(st.get("confirmed")), "duration": st.get("duration", 0.0),
                    "confidence": st.get("confidence", 0.85)}

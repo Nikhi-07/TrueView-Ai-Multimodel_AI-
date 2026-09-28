@@ -122,6 +122,9 @@ TEMPORAL_WINDOW_MULTIPLE_PERSONS = 0.35  # Require ~0.35s multi-person persisten
 TEMPORAL_WINDOW_LOOKING_AWAY     = 0.8   # Require 0.8s looking away before event
 TEMPORAL_WINDOW_NO_FACE          = 0.8   # Require 0.8s absent face (2-frame rule still filters noise)
 TEMPORAL_WINDOW_SPEAKING         = 0.8   # Require 0.8s speech
+TEMPORAL_WINDOW_EYES_CLOSED      = 1.0   # Require 1.0s closed eyes before alert (filters blinks)
+TEMPORAL_WINDOW_HEAD_TURN        = 0.8   # Require 0.8s head turned
+TEMPORAL_WINDOW_SPOOF            = 0.35  # Require ~0.35s spoof persistence
 
 # Risk Decay Rate (points recovered per clean second)
 RISK_DECAY_RATE = 1.0

@@ -56,7 +56,8 @@ class LandmarkExtractor:
         # Generate 68-point mesh from these anchors + bounding box
         landmarks = self._generate_68_landmarks(
             fx, fy, fw, fh,
-            right_eye, left_eye, nose_tip, right_mouth, left_mouth
+            right_eye, left_eye, nose_tip, right_mouth, left_mouth,
+            frame=frame
         )
 
         return {
@@ -69,10 +70,62 @@ class LandmarkExtractor:
             "image_height": h
         }
 
-    def _generate_68_landmarks(self, fx, fy, fw, fh, re, le, nt, rm, lm):
+    @staticmethod
+    def _measure_eye_ear_from_frame(frame, eye_center, fw, fh):
         """
-        Generate 68 iBUG-compatible landmarks from 5 anchor points and face bounding box.
-        Uses geometric interpolation to place anatomically plausible points.
+        Calculates Eye Aspect Ratio (EAR) directly from camera frame eye crop.
+        Returns EAR value between 0.08 (fully closed) and 0.38 (wide open).
+        """
+        if frame is None or frame.size == 0:
+            return 0.30
+
+        h_img, w_img = frame.shape[:2]
+        cx, cy = int(eye_center[0]), int(eye_center[1])
+        w_box = max(10, int(fw * 0.16))
+        h_box = max(8, int(fh * 0.12))
+
+        x1 = max(0, cx - w_box // 2)
+        x2 = min(w_img, cx + w_box // 2)
+        y1 = max(0, cy - h_box // 2)
+        y2 = min(h_img, cy + h_box // 2)
+
+        if (x2 - x1) < 6 or (y2 - y1) < 6:
+            return 0.30
+
+        crop = frame[y1:y2, x1:x2]
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        min_val = float(np.min(blurred))
+        mean_val = float(np.mean(blurred))
+        contrast = mean_val - min_val
+
+        # Low contrast means closed eyelid (no dark pupil exposed)
+        thresh = min_val + contrast * 0.35
+        dark_mask = (blurred <= thresh).astype(np.uint8)
+
+        margin = max(1, int((x2 - x1) * 0.20))
+        center_mask = dark_mask[:, margin:-(margin)] if margin > 0 else dark_mask
+
+        vertical_spans = []
+        for c in range(center_mask.shape[1]):
+            rows = np.where(center_mask[:, c] > 0)[0]
+            if len(rows) > 0:
+                span = rows[-1] - rows[0] + 1
+                vertical_spans.append(span)
+
+        if vertical_spans and contrast >= 25:
+            vert_open = float(np.median(vertical_spans))
+            eye_w_px = float(x2 - x1)
+            ear = (vert_open / max(eye_w_px * 0.75, 1.0)) * 1.25
+            return float(min(0.38, max(0.08, ear)))
+        else:
+            return 0.09
+
+    def _generate_68_landmarks(self, fx, fy, fw, fh, re, le, nt, rm, lm, frame=None):
+        """
+        Generate 68 iBUG-compatible landmarks from 5 anchor points, face bounding box,
+        and actual eye aperture from the frame.
         """
         landmarks = []
 
@@ -145,20 +198,26 @@ class LandmarkExtractor:
             y = nt[1] + fh * 0.02
             add(31 + i, x, y)
 
-        # --- Right Eye (36-41): 6 points (ellipse) ---
+        # --- Measure actual eye openness (EAR) from camera frame ---
         eye_w = fw * 0.06
-        eye_h = fh * 0.025
+        r_ear = self._measure_eye_ear_from_frame(frame, re, fw, fh)
+        l_ear = self._measure_eye_ear_from_frame(frame, le, fw, fh)
+        # Scale vertical eye height by measured EAR (EAR = sqrt(3)/2 * eye_h/eye_w)
+        r_eye_h = max(0.5, 1.1547 * eye_w * r_ear)
+        l_eye_h = max(0.5, 1.1547 * eye_w * l_ear)
+
+        # --- Right Eye (36-41): 6 points ---
         for i in range(6):
             angle = (i / 6.0) * 2 * np.pi
             x = re[0] + eye_w * np.cos(angle)
-            y = re[1] + eye_h * np.sin(angle)
+            y = re[1] + r_eye_h * np.sin(angle)
             add(36 + i, x, y)
 
-        # --- Left Eye (42-47): 6 points (ellipse) ---
+        # --- Left Eye (42-47): 6 points ---
         for i in range(6):
             angle = (i / 6.0) * 2 * np.pi
             x = le[0] + eye_w * np.cos(angle)
-            y = le[1] + eye_h * np.sin(angle)
+            y = le[1] + l_eye_h * np.sin(angle)
             add(42 + i, x, y)
 
         # --- Outer Lip (48-59): 12 points ---

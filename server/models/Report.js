@@ -19,6 +19,26 @@ const reportSchema = new mongoose.Schema(
       type: String,
       default: 'student@trueview.ai',
     },
+    candidateId: {
+      type: String,
+      default: null,
+    },
+    roomId: {
+      type: String,
+      default: null,
+    },
+    roomTitle: {
+      type: String,
+      default: null,
+    },
+    mode: {
+      type: String,
+      default: 'EXAM',
+    },
+    verdict: {
+      type: String,
+      default: 'PASSED',
+    },
     sessionType: {
       type: String,
       default: 'EXAM',
@@ -51,6 +71,31 @@ const reportSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    tabSwitches: {
+      type: Number,
+      default: 0,
+    },
+    maxTabSwitches: {
+      type: Number,
+      default: 3,
+    },
+    terminated: {
+      type: Boolean,
+      default: false,
+    },
+    terminationReason: {
+      type: String,
+      default: null,
+    },
+    tabSwitchTimeline: [
+      {
+        timestamp: { type: Date, default: Date.now },
+        count: { type: Number, default: 0 },
+        severity: { type: String, default: 'MEDIUM' },
+        message: { type: String, default: '' },
+        isTermination: { type: Boolean, default: false },
+      }
+    ],
     phoneDetections: {
       type: Number,
       default: 0,
@@ -136,6 +181,10 @@ const reportSchema = new mongoose.Schema(
         confidence: Number,
       },
     ],
+    subsystemResults: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
     status: {
       type: String,
       enum: ['PASSED', 'FLAGGED', 'REVIEW_REQUIRED'],

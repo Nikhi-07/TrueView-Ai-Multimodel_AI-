@@ -18,7 +18,7 @@ const STEPS = [
 export default function FaceRegistration() {
   const navigate = useNavigate();
   const { completeFaceRegistration } = useAuth();
-  const { videoRef, isActive, error: camError, startCamera, stopCamera, captureFrameBase64 } = useCamera();
+  const { videoRef, isActive, devices, selectedDeviceId, switchCamera, isVirtualCamera, error: camError, startCamera, stopCamera, captureFrameBase64 } = useCamera();
 
   const [currentStep, setCurrentStep] = useState(0);
   const [capturedEmbeddings, setCapturedEmbeddings] = useState([]);
@@ -205,6 +205,34 @@ export default function FaceRegistration() {
                 <span>MediaPipe blendshapes: {landmarker.status === 'ready' ? 'ON' : 'loading…'}</span>
               </div>
             </div>
+
+            {/* Camera Selector (if multiple cameras available) */}
+            {devices.length > 1 && (
+              <div className="w-full max-w-[320px] mb-4">
+                <label className="text-xs font-semibold text-gray-300 mb-1.5 flex items-center gap-1.5">
+                  <Camera size={14} className="text-primary-400" /> Select Camera:
+                </label>
+                <select
+                  value={selectedDeviceId}
+                  onChange={(e) => switchCamera(e.target.value)}
+                  className="w-full text-xs font-medium bg-surface-900 border border-white/10 rounded-lg py-2 px-3 text-white focus:outline-none focus:border-primary-500 shadow-sm"
+                >
+                  {devices.map((d, i) => (
+                    <option key={d.deviceId || i} value={d.deviceId}>
+                      {d.label || `Camera ${i + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Virtual Camera / OBS Warning */}
+            {isVirtualCamera && (
+              <div className="w-full max-w-[320px] mb-4 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-medium flex items-center gap-2">
+                <AlertTriangle size={16} className="shrink-0 text-amber-400" />
+                <span>OBS Virtual Camera active. Please switch to your physical webcam above.</span>
+              </div>
+            )}
 
             {/* Camera Preview Frame */}
             <div className="w-[320px] h-[320px] rounded-2xl overflow-hidden bg-black relative border border-white/[0.1] mb-6 flex items-center justify-center shadow-2xl">
