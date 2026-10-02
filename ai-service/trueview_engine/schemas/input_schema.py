@@ -17,6 +17,7 @@ class UnifiedMonitoringInput(BaseModel):
     session_id: str = Field(..., description="Unique monitoring session ID")
     user_id: Optional[str] = Field("candidate_01", description="User identity string")
     session_type: Optional[str] = Field(DEFAULT_CONTEXT, description="EXAM | INTERVIEW | ONLINE_CLASS | MEETING | WORKPLACE | CUSTOM")
+    monitoring_profile: Optional[str] = Field("MODERATE", description="RELAXED | MODERATE | STRICT")
     timestamp: Optional[float] = Field(None, description="Client frame timestamp")
     capture_timestamp: Optional[float] = Field(None, description="Client frame capture time (epoch ms/seconds). Used for end-to-end latency measurement.")
 

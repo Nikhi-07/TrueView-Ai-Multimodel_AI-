@@ -20,8 +20,18 @@ const participantSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['WAITING', 'VERIFYING', 'MONITORING', 'SUSPENDED', 'COMPLETED', 'LEFT', 'DISCONNECTED', 'TERMINATED'],
+      enum: ['WAITING', 'VERIFYING', 'MONITORING', 'SUSPENDED', 'COMPLETED', 'LEFT', 'DISCONNECTED', 'RECONNECTING', 'TERMINATED'],
       default: 'WAITING',
+    },
+    connectionState: {
+      type: String,
+      enum: ['CONNECTED', 'RECONNECTING', 'DISCONNECTED'],
+      default: 'CONNECTED',
+    },
+    monitoringStatus: {
+      type: String,
+      enum: ['INACTIVE', 'VERIFYING', 'ACTIVE', 'STOPPED', 'COMPLETED'],
+      default: 'INACTIVE',
     },
     tabSwitchCount: {
       type: Number,
@@ -47,6 +57,14 @@ const participantSchema = new mongoose.Schema(
     riskLevel: {
       type: String,
       default: 'NORMAL',
+    },
+    attention: {
+      type: Number,
+      default: 90,
+    },
+    attentionScore: {
+      type: Number,
+      default: 90,
     },
     violations: {
       type: Number,
@@ -154,8 +172,8 @@ const roomSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['ACTIVE', 'ENDED', 'CANCELLED'],
-      default: 'ACTIVE',
+      enum: ['CREATED', 'LIVE', 'ACTIVE', 'ENDED', 'CANCELLED'],
+      default: 'CREATED',
       index: true,
     },
     maxParticipants: {
@@ -163,6 +181,22 @@ const roomSchema = new mongoose.Schema(
       default: 30,
     },
     participantsCount: {
+      type: Number,
+      default: 0,
+    },
+    students: {
+      type: Number,
+      default: 0,
+    },
+    activeStudents: {
+      type: Number,
+      default: 0,
+    },
+    alerts: {
+      type: Number,
+      default: 0,
+    },
+    criticalAlerts: {
       type: Number,
       default: 0,
     },

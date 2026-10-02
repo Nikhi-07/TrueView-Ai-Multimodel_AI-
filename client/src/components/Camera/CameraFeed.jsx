@@ -24,16 +24,62 @@ const CameraFeed = forwardRef(function CameraFeed({ onDetectionUpdate, isActive 
     onDetectionUpdateRef.current = onDetectionUpdate;
   }, [onDetectionUpdate]);
 
-  // Capture a frame as base64 JPEG
-  const captureFrameBase64 = useCallback(() => {
+  const captureCanvasRef = useRef(null);
+  const cameraFpsRef = useRef(30);
+  const lastFrameTimeRef = useRef(performance.now());
+  const cameraFrameCountRef = useRef(0);
+
+  // Measure native camera rendering FPS independently of AI inference
+  useEffect(() => {
+    let animId = null;
+    let lastTime = performance.now();
+    let frameCount = 0;
+
+    const measureCameraFps = () => {
+      const now = performance.now();
+      frameCount++;
+      if (now - lastTime >= 1000) {
+        cameraFpsRef.current = Math.round((frameCount * 1000) / (now - lastTime));
+        frameCount = 0;
+        lastTime = now;
+      }
+      animId = requestAnimationFrame(measureCameraFps);
+    };
+
+    if (isCameraActive) {
+      animId = requestAnimationFrame(measureCameraFps);
+    }
+
+    return () => {
+      if (animId) cancelAnimationFrame(animId);
+    };
+  }, [isCameraActive]);
+
+  // Capture a frame as base64 JPEG with zero DOM thrashing, canvas reuse, and max 640px downscaling
+  const captureFrameBase64 = useCallback((maxWidth = 640, quality = 0.65) => {
     const video = videoRef.current;
     if (!video || !isCameraActive || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return null;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.7);
+
+    if (!captureCanvasRef.current) {
+      captureCanvasRef.current = document.createElement('canvas');
+    }
+    const canvas = captureCanvasRef.current;
+
+    const vWidth = video.videoWidth;
+    const vHeight = video.videoHeight;
+    const scale = vWidth > maxWidth ? maxWidth / vWidth : 1;
+    const targetWidth = Math.round(vWidth * scale);
+    const targetHeight = Math.round(vHeight * scale);
+
+    if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+    }
+
+    const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+    return canvas.toDataURL('image/jpeg', quality);
   }, [isCameraActive]);
 
   // Stop camera and release all hardware tracks cleanly (idempotent)
@@ -206,10 +252,11 @@ const CameraFeed = forwardRef(function CameraFeed({ onDetectionUpdate, isActive 
     }
   }, []);
 
-  // Expose captureFrameBase64, active MediaStream, startCamera and stopCamera to parent via ref
+  // Expose captureFrameBase64, active MediaStream, camera FPS, startCamera and stopCamera to parent via ref
   useImperativeHandle(ref, () => ({
     captureFrameBase64,
     getStream: () => streamRef.current,
+    getCameraFps: () => cameraFpsRef.current,
     startCamera,
     stopCamera
   }), [captureFrameBase64, startCamera, stopCamera]);

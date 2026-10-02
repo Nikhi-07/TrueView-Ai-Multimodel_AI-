@@ -35,6 +35,7 @@ export interface UserAuth {
     email: string;
     role: string;
     organization?: string;
+    fullName?: string;
   } | null;
   isAuthenticated: boolean;
 }

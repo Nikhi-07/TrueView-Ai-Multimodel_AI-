@@ -75,6 +75,7 @@ class StartSessionRequest(BaseModel):
     session_id: str
     user_id: Optional[str] = "candidate_01"
     session_type: Optional[str] = "EXAM"  # EXAM | INTERVIEW | ONLINE_CLASS | MEETING | WORKPLACE | CUSTOM
+    monitoring_profile: Optional[str] = "MODERATE"  # RELAXED | MODERATE | STRICT
     # Registered 128-D face embedding(s) for REAL recognition during the session.
     # Supplied server-side by the backend (never by the browser). When absent,
     # recognition honestly reports UNAVAILABLE instead of fabricating matches.
@@ -105,13 +106,15 @@ async def start_session(request: StartSessionRequest):
             request.session_id,
             user_id=request.user_id or "candidate_01",
             session_type=request.session_type or "EXAM",
-            registered_face_embeddings=request.registered_face_embeddings
+            registered_face_embeddings=request.registered_face_embeddings,
+            monitoring_profile=request.monitoring_profile or "MODERATE"
         )
         return {
             "success": True,
-            "message": f"Session '{request.session_id}' started in '{sess.session_type}' mode.",
+            "message": f"Session '{request.session_id}' started in '{sess.session_type}' mode with '{sess.monitoring_profile}' profile.",
             "session_id": request.session_id,
             "status": sess.state,
+            "monitoring_profile": sess.monitoring_profile,
             "module_health": engine.model_manager.get_health(),
         }
     except Exception as e:

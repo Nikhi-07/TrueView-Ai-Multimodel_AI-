@@ -107,8 +107,8 @@ def run_tests():
     evts1 = [e for e in out1.behaviour.events if e.state != "RESOLVED"]
     print(f"  Frame 1 Active Events count: {len(evts1)}")
 
-    # Sleep window for temporal confirmation
-    time.sleep(0.40)
+    # Sleep window for temporal confirmation (>= 0.8s in MODERATE mode)
+    time.sleep(0.85)
 
     # Frame 2: Persistent detection -> Confirmed
     payload2 = UnifiedMonitoringInput(

@@ -23,10 +23,11 @@ class SessionInstance:
     """Represents an active proctoring session."""
 
     def __init__(self, session_id: str, user_id: str = "candidate_01", session_type: str = "EXAM",
-                 registered_face_embeddings=None):
+                 registered_face_embeddings=None, monitoring_profile: str = "MODERATE"):
         self.session_id = session_id
         self.user_id = user_id
         self.session_type = session_type
+        self.monitoring_profile = monitoring_profile or "MODERATE"
         # Registered 128-D face embedding(s) supplied by the backend at session start.
         # Used ONLY for real SFace recognition; empty means recognition is unavailable.
         self.registered_face_embeddings = registered_face_embeddings or []
@@ -58,9 +59,9 @@ class SessionManager:
         return cls._instance
 
     def get_or_create(self, session_id: str, user_id: str = "candidate_01", session_type: str = "EXAM",
-                      registered_face_embeddings=None) -> SessionInstance:
+                      registered_face_embeddings=None, monitoring_profile: str = "MODERATE") -> SessionInstance:
         if session_id not in self._sessions:
-            sess = SessionInstance(session_id, user_id, session_type, registered_face_embeddings)
+            sess = SessionInstance(session_id, user_id, session_type, registered_face_embeddings, monitoring_profile=monitoring_profile)
             sess.state = SessionState.MONITORING
             self._sessions[session_id] = sess
         else:
@@ -71,6 +72,8 @@ class SessionManager:
                 sess.user_id = user_id
             if session_type:
                 sess.session_type = session_type
+            if monitoring_profile:
+                sess.monitoring_profile = monitoring_profile
         return self._sessions[session_id]
 
     def set_state(self, session_id: str, state: str):

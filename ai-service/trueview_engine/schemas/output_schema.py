@@ -80,11 +80,15 @@ class BehaviourEventItem(BaseModel):
     confidence: float
     duration: float
     evidence: str
-    state: str = "CONFIRMED"            # POTENTIAL | OBSERVING | CONFIRMED | ACTIVE | RESOLVED
+    state: str = "CONFIRMED"            # POTENTIAL | OBSERVING | CONFIRMED | ACTIVE | RESOLVED | ALERTED | COOLDOWN
     category: Optional[str] = "BEHAVIOUR"
     source: Optional[str] = "AI_ENGINE"
     message: Optional[str] = None
+    should_alert: Optional[bool] = True
+    in_cooldown: Optional[bool] = False
     metadata: Optional[Dict[str, Any]] = None
+
+    model_config = {"extra": "allow"}
 
 
 class BehaviourSummary(BaseModel):
@@ -154,6 +158,7 @@ class UnifiedMonitoringOutput(BaseModel):
     session_id: str
     timestamp: str
     status: str = "MONITORING"          # INITIALIZING | CALIBRATING | MONITORING | DEGRADED | COMPLETED
+    monitoring_profile: Optional[str] = "MODERATE"
 
     # Real-time latency instrumentation (unix epoch seconds).
     inference_start_timestamp: Optional[float] = None

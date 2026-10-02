@@ -63,6 +63,9 @@ from trueview_engine.config.thresholds import (
     TEMPORAL_WINDOW_EYES_CLOSED,
     TEMPORAL_WINDOW_HEAD_TURN,
     TEMPORAL_WINDOW_SPOOF,
+    DEFAULT_ALERT_COOLDOWN_SEC,
+    DEFAULT_MONITORING_PROFILE,
+    get_monitoring_profile_config,
 )
 
 
@@ -123,16 +126,20 @@ class TrueViewEngine:
         timings: Dict[str, float] = {}
         t_mark = t0
         session_id = payload.session_id
+        profile_key = getattr(payload, "monitoring_profile", None) or "MODERATE"
+        profile_cfg = get_monitoring_profile_config(profile_key)
         session_context = {
             "session_id": session_id,
             "user_id": payload.user_id or "candidate_01",
             "session_type": (payload.session_type or "EXAM").upper(),
+            "monitoring_profile": profile_key,
         }
 
         session_inst = self.session_manager.get_or_create(
             session_id,
             user_id=payload.user_id or "candidate_01",
-            session_type=payload.session_type or "EXAM"
+            session_type=payload.session_type or "EXAM",
+            monitoring_profile=profile_key
         )
         # Real face-recognition source of truth: registered embeddings supplied by the
         # backend at session start. The shared face pipeline uses them (and only them)
@@ -161,13 +168,13 @@ class TrueViewEngine:
         timings["perception"] = round((time.time() - t_mark) * 1000, 1)
         t_mark = time.time()
 
-        # Dynamic Skip-Frame Schedule for YOLO Object Detection
+        # Dynamic Skip-Frame Schedule for YOLO Object Detection (passes already-decoded frame)
         intervals = self.scheduler.get_execution_intervals()
-        if frame is not None and (frame_idx % intervals.get("yolo", 4) == 0):
+        if frame is not None and (frame_idx % intervals.get("yolo", 2) == 0):
             yolo_svc = self.model_manager.object_detection_service
             if yolo_svc is not None:
                 try:
-                    yolo_res = yolo_svc.process_frame(payload.video_frame, draw_overlay=False)
+                    yolo_res = yolo_svc.process_frame(frame, draw_overlay=False)
                     if "error" not in yolo_res:
                         self._last_yolo_result = yolo_res
                 except Exception:
@@ -201,10 +208,13 @@ class TrueViewEngine:
         prev_dur = prev_dist.get("duration", 0.0) if prev_dist.get("state") != "RESOLVED" else 0.0
 
         # Stage 6: Advanced Attention Intelligence
+        gaze_conf = float(gaze.get("confidence", 0.85))
         attention_eval = self.attention_engine.evaluate(
             session_id, gaze.get("direction", "center"), pose.get("direction", "Looking Straight"),
             calibrated_pose_deltas, shared_face.get("face_detected", False), quality_eval,
-            prev_dur, session_context["session_type"]
+            prev_dur, session_context["session_type"],
+            gaze_confidence=gaze_conf,
+            monitoring_profile=profile_key
         )
 
         # Stage 7: Multimodal Feature Fusion Layer
@@ -219,61 +229,135 @@ class TrueViewEngine:
         self.memory_engine.push_snapshot(session_id, fused_features)
         temp_metrics = self.memory_engine.get_window_metrics(session_id)
 
-        # Stage 9: Temporal Event Confirmation State Machine
-        # Confirmation windows come from config/thresholds.py (conservative real-time
-        # tuning). The 2-consecutive-frame rule still filters single-frame noise;
-        # these windows decide only how long a signal must persist BEFORE the first
-        # alert is emitted — they never delay deduplication of later frames.
+        # Stage 9: Temporal Event Confirmation State Machine with Profile Configuration
+        windows = profile_cfg.get("temporal_windows", {})
+        conf_thresholds = profile_cfg.get("confidence_thresholds", {})
+        cooldowns = profile_cfg.get("cooldown_seconds", {})
+
+        win_phone = windows.get("phone", TEMPORAL_WINDOW_PHONE_SECS)
+        win_multi = windows.get("multiple_persons", TEMPORAL_WINDOW_MULTIPLE_PERSONS)
+        win_no_face = windows.get("no_face", TEMPORAL_WINDOW_NO_FACE)
+        win_dist = windows.get("looking_away", TEMPORAL_WINDOW_LOOKING_AWAY)
+        win_speak = windows.get("speaking", TEMPORAL_WINDOW_SPEAKING)
+        win_eyes = windows.get("eyes_closed", TEMPORAL_WINDOW_EYES_CLOSED)
+        win_head = windows.get("head_turn", TEMPORAL_WINDOW_HEAD_TURN)
+        win_spoof = windows.get("spoof", TEMPORAL_WINDOW_SPOOF)
+        win_secondary = windows.get("secondary_objects", 0.8)
+        default_cooldown = cooldowns.get("default", DEFAULT_ALERT_COOLDOWN_SEC)
+
+        # 1. Prohibited Phone (multi-frame confirmation >= 0.8s)
         st_phone = self.event_state_machine.update_condition(
             session_id, "phone", fused_features["environment"]["phone_detected"],
-            0.92, "Mobile phone detected in camera frame.", TEMPORAL_WINDOW_PHONE_SECS, quality_eval
+            0.92, "Mobile phone detected in camera frame.", win_phone, quality_eval,
+            min_confidence=0.80, cooldown_sec=default_cooldown, min_frames=2
         )
+
+        # 1b. Secondary Prohibited Objects (laptop, book, monitor) - multi-frame confirmation >= 0.8s
+        env_feat = fused_features.get("environment", {})
+        sec_obj_states = {}
+        for obj_key, raw_det, obj_label in [
+            ("laptop", bool(env_feat.get("laptop_detected", False)), "Secondary laptop"),
+            ("book", bool(env_feat.get("book_detected", False)), "Prohibited book/document"),
+            ("monitor", bool(env_feat.get("monitor_detected", False)), "Secondary monitor"),
+        ]:
+            st_sec = self.event_state_machine.update_condition(
+                session_id, f"obj_{obj_key}", raw_det,
+                0.88, f"{obj_label} detected in camera view.",
+                win_secondary, quality_eval,
+                min_confidence=0.80, cooldown_sec=default_cooldown, min_frames=2
+            )
+            sec_obj_states[obj_key] = st_sec
+
+        # 2. Multiple Persons (HIGH PRIORITY, multi-frame confirmation >= 0.8s)
         st_multi = self.event_state_machine.update_condition(
             session_id, "multiple_persons", fused_features["environment"]["person_count"] > 1,
-            0.90, f"{fused_features['environment']['person_count']} persons in frame.", TEMPORAL_WINDOW_MULTIPLE_PERSONS, quality_eval
+            0.90, f"{fused_features['environment']['person_count']} persons in frame.", win_multi, quality_eval,
+            min_confidence=0.80, cooldown_sec=default_cooldown, min_frames=2
         )
+
+        # 3. User Absent (Grace period > 2.0s in moderate)
         st_no_face = self.event_state_machine.update_condition(
             session_id, "no_face", not fused_features["face_detected"],
-            0.95, "Candidate not visible in view.", TEMPORAL_WINDOW_NO_FACE, quality_eval
+            0.95, "Candidate not visible in view.", win_no_face, quality_eval,
+            min_confidence=0.75, cooldown_sec=default_cooldown, min_frames=2
+        )
+
+        # 4. Gaze / Looking Away / Prolonged Distraction (>= 3.0s, confidence >= 0.85 in moderate)
+        gaze_data = fused_features.get("gaze", {})
+        gaze_conf_val = float(gaze_data.get("confidence", 0.85))
+        gaze_dir_val = str(gaze_data.get("direction", "center")).strip().lower()
+        min_obs = conf_thresholds.get("gaze_min_observe", 0.70)
+        min_conf = conf_thresholds.get("gaze_confirm", 0.85)
+
+        is_gaze_diverted = (
+            fused_features["attention"]["status"] in ("PROLONGED_DISTRACTION", "REPEATED_DISTRACTION", "OFFSCREEN_GLANCE")
+            or (gaze_dir_val in ("left", "right", "up", "offscreen") and gaze_conf_val >= min_obs)
         )
         st_dist = self.event_state_machine.update_condition(
-            session_id, "looking_away", fused_features["attention"]["status"] in ("PROLONGED_DISTRACTION", "REPEATED_DISTRACTION", "OFFSCREEN_GLANCE"),
-            0.88, f"Candidate attention diverted ({fused_features['attention']['status']}).", TEMPORAL_WINDOW_LOOKING_AWAY, quality_eval
+            session_id, "looking_away", is_gaze_diverted,
+            gaze_conf_val, f"Candidate attention diverted ({fused_features['attention']['status']}).",
+            win_dist, quality_eval,
+            min_confidence=min_conf, min_observe_conf=min_obs,
+            cooldown_sec=cooldowns.get("looking_away", default_cooldown), min_frames=3
+        )
+
+        # 5. Voice activity / Speaking (sustained >= 2.0s with VAD >= 0.70)
+        is_speech_active = (
+            bool(fused_features["audio"]["speaking"])
+            and float(audio_res.get("voice_confidence", 0.0)) >= conf_thresholds.get("voice_vad", 0.70)
         )
         st_speak = self.event_state_machine.update_condition(
-            session_id, "speaking", fused_features["audio"]["speaking"],
-            0.85, "Voice activity detected.", TEMPORAL_WINDOW_SPEAKING, quality_eval
+            session_id, "speaking", is_speech_active,
+            float(audio_res.get("voice_confidence", 0.85)), "Voice activity detected.",
+            win_speak, quality_eval,
+            min_confidence=conf_thresholds.get("voice_vad", 0.70),
+            cooldown_sec=cooldowns.get("speaking", default_cooldown), min_frames=2
         )
 
-        # Gaze & Eyes checks
-        gaze_data = fused_features.get("gaze", {})
+        # 6. Eyes Closed (continuous >= 2.5s in moderate, 8s cooldown)
         is_eyes_closed = bool(gaze_data.get("eyes_closed", False))
+        eyes_closed_conf = float(gaze_data.get("eye_closure_confidence", 0.95)) if is_eyes_closed else 0.0
         st_eyes = self.event_state_machine.update_condition(
             session_id, "eyes_closed", is_eyes_closed,
-            0.90, "Candidate eyes appear closed beyond normal blink threshold.", TEMPORAL_WINDOW_EYES_CLOSED, quality_eval
+            eyes_closed_conf, "Candidate eyes appear closed beyond normal blink threshold.",
+            win_eyes, quality_eval,
+            min_confidence=0.85,
+            cooldown_sec=cooldowns.get("eyes_closed", default_cooldown), min_frames=3
         )
 
-        # Head Pose checks
+        # 7. Head Pose Deviation (sustained >= 3.0s, yaw > 35° or pitch > 28° in moderate)
         pose_data = fused_features.get("head_pose", {})
         yaw = abs(pose_data.get("yaw", 0.0))
         pitch = abs(pose_data.get("pitch", 0.0))
-        is_head_turned = yaw > 25.0
+        yaw_limit = conf_thresholds.get("pose_yaw_deg", 35.0)
+        pitch_limit = conf_thresholds.get("pose_pitch_deg", 28.0)
+
+        is_head_turned = yaw > yaw_limit
         st_head_turned = self.event_state_machine.update_condition(
             session_id, "head_turned", is_head_turned,
-            0.88, f"Candidate head turned persistently (yaw: {yaw:.1f}°).", TEMPORAL_WINDOW_HEAD_TURN, quality_eval
+            0.88, f"Candidate head turned persistently (yaw: {yaw:.1f}°).",
+            win_head, quality_eval,
+            min_confidence=0.85,
+            cooldown_sec=cooldowns.get("head_turn", default_cooldown), min_frames=3
         )
-        is_head_mov = pitch > 20.0
+        is_head_mov = pitch > pitch_limit
         st_head_mov = self.event_state_machine.update_condition(
             session_id, "head_movement", is_head_mov,
-            0.85, f"Candidate head tilted excessively (pitch: {pitch:.1f}°).", TEMPORAL_WINDOW_HEAD_TURN, quality_eval
+            0.85, f"Candidate head tilted excessively (pitch: {pitch:.1f}°).",
+            win_head, quality_eval,
+            min_confidence=0.85,
+            cooldown_sec=cooldowns.get("head_movement", default_cooldown), min_frames=3
         )
 
-        # Liveness / Anti-spoof check
+        # 8. Presentation attack / Spoof (strict, 0.35s - only evaluated when a face is detected)
         liv_data = fused_features.get("liveness", {})
-        is_spoof = not bool(liv_data.get("is_live", True))
+        is_spoof = bool(fused_features.get("face_detected", False)) and not bool(liv_data.get("is_live", True))
         st_spoof = self.event_state_machine.update_condition(
             session_id, "spoof", is_spoof,
-            float(liv_data.get("p_spoof", 0.90)), "Presentation attack / biometric spoof detected.", TEMPORAL_WINDOW_SPOOF, quality_eval
+            float(liv_data.get("p_spoof", 0.90)), "Presentation attack / biometric spoof detected.",
+            win_spoof, quality_eval,
+            min_confidence=conf_thresholds.get("liveness", 0.70),
+            cooldown_sec=default_cooldown, min_frames=2
         )
 
         confirmed_states = {
@@ -286,6 +370,7 @@ class TrueViewEngine:
             "head_turned": st_head_turned,
             "head_movement": st_head_mov,
             "spoof": st_spoof,
+            "secondary_objects": sec_obj_states,
         }
         timings["confirmation"] = round((time.time() - t_mark) * 1000, 1)
         t_mark = time.time()
@@ -307,8 +392,16 @@ class TrueViewEngine:
             "head_turned": ("HEAD_POSITION_NORMAL", "HEAD_POSE", "Candidate head position returned to center."),
             "head_movement": ("HEAD_POSITION_NORMAL", "HEAD_POSE", "Candidate head pitch returned to normal."),
             "spoof": ("LIVENESS_CONFIRMED", "BIOMETRIC", "Liveness verified."),
+            "obj_laptop": ("LAPTOP_CLEARED", "PROHIBITED_OBJECT", "Secondary laptop/screen no longer visible."),
+            "obj_book": ("BOOK_CLEARED", "PROHIBITED_OBJECT", "Prohibited book/document no longer visible."),
+            "obj_monitor": ("MONITOR_CLEARED", "PROHIBITED_OBJECT", "Secondary monitor no longer visible."),
         }
-        for key, st in confirmed_states.items():
+        eval_states_for_lifecycle = dict(confirmed_states)
+        eval_states_for_lifecycle.pop("secondary_objects", None)
+        for obj_k, obj_s in sec_obj_states.items():
+            eval_states_for_lifecycle[f"obj_{obj_k}"] = obj_s
+
+        for key, st in eval_states_for_lifecycle.items():
             was_confirmed = bool(prev_confirmed.get(key, {}).get("confirmed"))
             if was_confirmed and not st.get("confirmed"):
                 if key in cleared_map:
@@ -335,7 +428,7 @@ class TrueViewEngine:
         self._prev_confirmed[session_id] = {
             key: {"confirmed": bool(st.get("confirmed")), "duration": st.get("duration", 0.0),
                    "confidence": st.get("confidence", 0.85)}
-            for key, st in confirmed_states.items()
+            for key, st in eval_states_for_lifecycle.items()
         }
 
         # Stage 10: Event Correlation Engine
@@ -350,7 +443,7 @@ class TrueViewEngine:
             gaze.get("direction", "center"), pose.get("direction", "Looking Straight")
         )
         uncertainty_eval = self.uncertainty_engine.evaluate(
-            0.92, quality_eval, agree_score, any(s["confirmed"] for s in confirmed_states.values())
+            0.92, quality_eval, agree_score, any(s.get("confirmed", False) for s in eval_states_for_lifecycle.values())
         )
         timings["correlation"] = round((time.time() - t_mark) * 1000, 1)
         t_mark = time.time()
@@ -394,6 +487,7 @@ class TrueViewEngine:
             session_id=session_id,
             timestamp=now_str,
             status=session_inst.state,
+            monitoring_profile=profile_key,
             inference_start_timestamp=t0,
             inference_end_timestamp=time.time(),
             event_generated_timestamp=time.time(),

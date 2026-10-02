@@ -86,11 +86,11 @@ class SharedFacePipeline:
             out["liveness"] = {
                 "status": "no_face",
                 "liveness_status": "NO_FACE",
-                "is_live": False,
+                "is_live": True,  # Face absence is handled by no_face / presence, not as a biometric spoof attack
                 "confidence": 0.0,
                 "liveness_score": 0.0,
                 "p_real": 0.0,
-                "p_spoof": 1.0,
+                "p_spoof": 0.0,
                 "attack_type": "NONE",
                 "model": "convnext-tiny-run04"
             }
@@ -117,6 +117,7 @@ class SharedFacePipeline:
                             "direction": "unknown",
                             "confidence": 0.0,
                             "eyes_closed": True,
+                            "eye_closure_confidence": 0.95,
                             "ear": avg_ear,
                         }
                     else:

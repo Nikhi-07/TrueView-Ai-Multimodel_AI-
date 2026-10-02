@@ -20,6 +20,7 @@ const Room = require('../models/Room');
 const { POLICY_THRESHOLDS, evaluateEventSeverity } = require('../utils/sessionPolicies');
 
 const activeSessions = new Map();
+const reconnectTimers = new Map(); // key: participantId/sessionId -> { timer, sessionId, roomId, participant }
 
 // Default durations (seconds) per session mode when the reviewer does not specify one.
 const DEFAULT_SESSION_DURATION = {
@@ -51,6 +52,7 @@ const VALID_EVENT_TYPES = new Set([
   'BLURRY_FRAME', 'CRITICAL_RISK_THRESHOLD', 'AI_ENGINE_OFFLINE', 'MONITORING_THRESHOLD_EXCEEDED',
   'LIVENESS_FAILED', 'ACTIVE_CHALLENGE_FAILED', 'SESSION_STARTED', 'PARTICIPANT_JOINED', 'PARTICIPANT_LEFT',
   'SPEECH_CONTENT_EVENT', 'WEBRTC_CONNECTION_OPEN', 'WEBRTC_CONNECTION_CLOSED',
+  'TAB_SWITCH_DETECTED', 'TAB_SWITCH_LIMIT_EXCEEDED', 'BOOK_DETECTED',
   // Event lifecycle (DETECTED -> CLEARED) types emitted by the AI engine
   'PHONE_CLEARED', 'MULTIPLE_PERSONS_CLEARED', 'FACE_PRESENT', 'GAZE_CLEARED', 'SPEECH_STOPPED',
   'EYES_OPEN', 'HEAD_POSITION_NORMAL', 'LIVENESS_CONFIRMED',
@@ -80,6 +82,23 @@ const CLEAR_EVENTS = new Set([
   'PHONE_CLEARED', 'MULTIPLE_PERSONS_CLEARED', 'FACE_PRESENT', 'GAZE_CLEARED', 'SPEECH_STOPPED',
   'EYES_OPEN', 'HEAD_POSITION_NORMAL', 'LIVENESS_CONFIRMED'
 ]);
+
+// Per-event cooldown periods (ms) to avoid duplicate alerts during ongoing episodes
+const EVENT_COOLDOWN_MS = {
+  EYES_CLOSED: 8000,
+  OFFSCREEN_GLANCE: 8000,
+  PROLONGED_DISTRACTION: 8000,
+  GAZE_DEVIATION: 8000,
+  LOOKING_AWAY: 8000,
+  HEAD_TURNED: 8000,
+  HEAD_MOVEMENT: 8000,
+  SPEAKING_DETECTED: 8000,
+  VOICE_DETECTED: 8000,
+  SPEECH_DETECTED: 8000,
+  USER_ABSENT: 8000,
+  NO_FACE_DETECTED: 8000,
+  DEFAULT: 8000,
+};
 
 // Priority classes: P0 (critical) through P3 (low). Used by the frontend to order
 // the live alert stack; critical events always surface first.
@@ -367,88 +386,218 @@ function initProctorSocket(io) {
       }
     });
 
-    // Join Proctor Room
-    socket.on('join_room', ({ sessionId, roomId, role, user, sessionType, sessionDuration }) => {
-      const extractedRoomId = roomId || (sessionId && sessionId.startsWith('TRV-') ? sessionId.split('-').slice(0, 2).join('-') : null);
+    // Join Proctor Room (Standard ROOM_JOIN and legacy join_room)
+    const handleJoin = async ({ sessionId, roomId, role, user, sessionType, sessionDuration }) => {
+      const extractedRoomId = roomId || (sessionId && sessionId.startsWith('TRV-') ? (sessionId.startsWith('TRV-TRV-') ? sessionId.split('-').slice(1, 3).join('-') : sessionId.split('-').slice(0, 2).join('-')) : null);
       const effectiveRoomId = extractedRoomId || roomId;
       const roomName = `room_${sessionId}`;
+
       socket.join(roomName);
       socket.join(`session:${sessionId}`);
+      socket.join(`room:${sessionId}`);
       socket.sessionId = sessionId;
+
       if (effectiveRoomId) {
         socket.roomId = effectiveRoomId;
+        socket.join(`room:${effectiveRoomId}`);
         socket.join(`proctor:${effectiveRoomId}`);
         socket.join(`room:proctor:${effectiveRoomId}`);
         socket.join(`room_${effectiveRoomId}`);
       }
 
-      // Display role from client; AUTHORITATIVE role comes from the JWT (socket.authUser)
-      socket.role = socket.authUser && socket.authUser.role === 'admin' ? 'reviewer' : (role === 'reviewer' || role === 'host' ? role : 'participant');
+      // Authoritative role: reviewers/admins or host
+      socket.role = (socket.authUser && socket.authUser.role === 'admin')
+        ? 'reviewer'
+        : (role === 'reviewer' || role === 'host' ? role : 'participant');
+
       const displayUser = user || (socket.authUser ? { id: socket.authUser.id, name: socket.authUser.name, role: socket.authUser.role } : null);
+      const participantId = displayUser ? String(displayUser.id || displayUser._id) : socket.id;
+
+      // Cancel any pending reconnection timeout for this participant
+      if (reconnectTimers.has(participantId) || (sessionId && reconnectTimers.has(sessionId))) {
+        const rec = reconnectTimers.get(participantId) || reconnectTimers.get(sessionId);
+        clearTimeout(rec.timer);
+        reconnectTimers.delete(participantId);
+        if (sessionId) reconnectTimers.delete(sessionId);
+        console.log(`[ProctorSocket] Reconnection SUCCESS for participant ${participantId}`);
+      }
 
       const sessionState = getOrCreateSessionState(sessionId, sessionType, sessionDuration);
       if (effectiveRoomId && !sessionState.roomId) {
         sessionState.roomId = effectiveRoomId;
       }
 
-      if (displayUser && !sessionState.participants.some((p) => p.id === displayUser.id || p.id === socket.id)) {
-        sessionState.participants.push({
+      // Check if participant already exists in session state (stable deduplication)
+      let existingIndex = sessionState.participants.findIndex(
+        (p) => p.id === participantId || (sessionId && p.sessionId === sessionId)
+      );
+
+      let participantRecord = null;
+
+      if (existingIndex >= 0) {
+        // Update connection state on existing record
+        sessionState.participants[existingIndex].socketId = socket.id;
+        sessionState.participants[existingIndex].connectionState = 'CONNECTED';
+        if (displayUser?.name) sessionState.participants[existingIndex].name = displayUser.name;
+        participantRecord = sessionState.participants[existingIndex];
+      } else if (displayUser) {
+        participantRecord = {
           socketId: socket.id,
-          id: displayUser.id || socket.id,
+          id: participantId,
+          sessionId: sessionId || null,
           name: displayUser.name || (socket.role === 'reviewer' || socket.role === 'host' ? 'Reviewer / Host' : 'Participant'),
           email: displayUser.email || '',
           role: socket.role,
+          status: socket.role === 'participant' ? 'VERIFYING' : 'ACTIVE',
+          connectionState: 'CONNECTED',
+          monitoringStatus: 'INACTIVE',
+          riskScore: 0,
+          riskLevel: 'LOW',
+          attentionScore: 90,
+          liveness: 'LIVE',
+          identityStatus: 'VERIFIED',
+          violations: 0,
           joinedAt: new Date().toISOString(),
-        });
+        };
+        sessionState.participants.push(participantRecord);
+      }
 
-        // Inform the room a participant joined (evidence-based, not accusatory)
-        if (socket.role === 'participant') {
-          sessionState.userId = displayUser.id || socket.id;
-          sessionState.userName = displayUser.name || 'Participant';
-          sessionState.userEmail = displayUser.email || '';
-          persistSession(sessionState);
-          const joinAlert = {
-            eventId: makeEventId(),
-            sessionId,
-            roomId: effectiveRoomId,
-            participantId: displayUser.id || socket.id,
-            candidateName: displayUser.name || 'Participant',
-            timestamp: new Date().toISOString(),
-            eventType: 'PARTICIPANT_JOINED',
-            severity: 'INFO',
-            confidence: 1.0,
-            description: `${displayUser.name || 'Participant'} joined the monitored session.`,
-            status: 'OPEN',
-            state: 'DETECTED',
-            ...buildAlertMeta(),
-            priority: 'P3',
-          };
-          sessionState.alerts.unshift(joinAlert);
-          if (sessionState.alerts.length > 200) sessionState.alerts.pop();
-          sessionState.alertCount += 1;
-          persistAlert(joinAlert);
-          io.to(roomName).emit('AI_EVENT', joinAlert);
-          io.to(`session:${sessionId}`).emit('AI_EVENT', joinAlert);
-          if (effectiveRoomId) {
-            io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', joinAlert);
-            io.to(`proctor:${effectiveRoomId}`).emit('participant_joined', {
-              roomId: effectiveRoomId,
-              sessionId,
-              candidate: { id: displayUser.id || socket.id, name: displayUser.name || 'Participant', email: displayUser.email || '' },
-              participantsCount: sessionState.participants.length,
-              participants: sessionState.participants,
-            });
-            io.to(`room_${effectiveRoomId}`).emit('room_participants_updated', {
-              participantsCount: sessionState.participants.length,
-              participants: sessionState.participants,
-            });
+      // Authoritative Room state synchronization with MongoDB
+      let roomStudentsCount = 0;
+      let roomActiveStudentsCount = 0;
+      let roomParticipants = sessionState.participants;
+
+      if (effectiveRoomId) {
+        try {
+          const roomDoc = await Room.findOne({ roomId: effectiveRoomId.toUpperCase() });
+          if (roomDoc) {
+            if (socket.role === 'participant' && displayUser) {
+              if (!roomDoc.participants) roomDoc.participants = [];
+              const pIdx = roomDoc.participants.findIndex(
+                (p) => p.id === participantId || (sessionId && p.sessionId === sessionId)
+              );
+              if (pIdx >= 0) {
+                roomDoc.participants[pIdx].socketId = socket.id;
+                roomDoc.participants[pIdx].connectionState = 'CONNECTED';
+                if (roomDoc.participants[pIdx].status === 'LEFT') {
+                  roomDoc.participants[pIdx].status = 'VERIFYING';
+                }
+              } else {
+                roomDoc.participants.push({
+                  id: participantId,
+                  sessionId: sessionId || `TRV-${effectiveRoomId}-${Date.now().toString(36).toUpperCase()}`,
+                  name: displayUser.name || 'Participant',
+                  email: displayUser.email || '',
+                  role: 'participant',
+                  status: 'VERIFYING',
+                  connectionState: 'CONNECTED',
+                  monitoringStatus: 'INACTIVE',
+                  riskScore: 0,
+                  riskLevel: 'LOW',
+                  violations: 0,
+                  liveness: 'LIVE',
+                  identityStatus: 'VERIFIED',
+                  gaze: 'center',
+                  attentionScore: 90,
+                  joinedAt: new Date(),
+                });
+              }
+              const currentActive = roomDoc.participants.filter(p => p.status !== 'LEFT');
+              const activeMon = roomDoc.participants.filter(p => p.status === 'MONITORING');
+              roomDoc.participantsCount = currentActive.length;
+              roomDoc.students = currentActive.length;
+              roomDoc.activeStudents = activeMon.length;
+              if (roomDoc.status === 'CREATED' || roomDoc.status === 'WAITING') {
+                roomDoc.status = 'LIVE';
+              }
+              await roomDoc.save();
+            }
+
+            const currentActive = (roomDoc.participants || []).filter(p => p.status !== 'LEFT');
+            const activeMon = (roomDoc.participants || []).filter(p => p.status === 'MONITORING');
+            roomStudentsCount = currentActive.length;
+            roomActiveStudentsCount = activeMon.length;
+            roomParticipants = roomDoc.participants;
           }
+        } catch (dbErr) {
+          console.warn('[ProctorSocket] DB Room sync error in handleJoin:', dbErr.message);
         }
       }
 
-      console.log(`[ProctorSocket] ${socket.role} (${socket.id}) joined ${roomName} & proctor:${effectiveRoomId} (mode=${sessionState.sessionType})`);
+      if (!roomStudentsCount) {
+        const studentParticipants = sessionState.participants.filter(p => p.role === 'participant' && p.status !== 'LEFT');
+        roomStudentsCount = studentParticipants.length;
+        roomActiveStudentsCount = studentParticipants.filter(p => p.status === 'MONITORING').length;
+      }
 
-      // Emit current state + server time sync (browser clocks are never trusted).
+      // Inform the room a student joined
+      if (socket.role === 'participant' && displayUser) {
+        sessionState.userId = participantId;
+        sessionState.userName = displayUser.name || 'Participant';
+        sessionState.userEmail = displayUser.email || '';
+        persistSession(sessionState);
+
+        const joinAlert = {
+          eventId: makeEventId(),
+          sessionId,
+          roomId: effectiveRoomId,
+          participantId,
+          userId: participantId,
+          candidateName: displayUser.name || 'Participant',
+          timestamp: new Date().toISOString(),
+          eventType: 'PARTICIPANT_JOINED',
+          type: 'PARTICIPANT_JOINED',
+          severity: 'INFO',
+          confidence: 1.0,
+          description: `${displayUser.name || 'Participant'} joined the monitored room.`,
+          status: 'OPEN',
+          state: 'DETECTED',
+          ...buildAlertMeta(),
+          priority: 'P3',
+        };
+        sessionState.alerts.unshift(joinAlert);
+        if (sessionState.alerts.length > 200) sessionState.alerts.pop();
+        sessionState.alertCount += 1;
+        persistAlert(joinAlert);
+
+        io.to(roomName).emit('AI_EVENT', joinAlert);
+        io.to(`session:${sessionId}`).emit('AI_EVENT', joinAlert);
+
+        if (effectiveRoomId) {
+          const joinPayload = {
+            roomId: effectiveRoomId,
+            sessionId,
+            studentId: participantId,
+            userId: participantId,
+            studentName: displayUser.name || 'Participant',
+            candidate: participantRecord,
+            students: roomStudentsCount,
+            activeStudents: roomActiveStudentsCount,
+            participantsCount: roomStudentsCount,
+            participants: roomParticipants,
+          };
+          io.to(`room:${effectiveRoomId}`).emit('ROOM_PARTICIPANT_JOINED', joinPayload);
+          io.to(`proctor:${effectiveRoomId}`).emit('ROOM_PARTICIPANT_JOINED', joinPayload);
+          io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', joinAlert);
+          io.to(`proctor:${effectiveRoomId}`).emit('participant_joined', joinPayload);
+          io.to(`proctor:${effectiveRoomId}`).emit('STUDENT_JOINED', joinPayload);
+        }
+      }
+
+      console.log(`[ProctorSocket] ${socket.role} (${socket.id}) joined ${roomName} & room:${effectiveRoomId} (students=${roomStudentsCount})`);
+
+      // Acknowledge ROOM_JOINED back to joining client
+      socket.emit('ROOM_JOINED', {
+        roomId: effectiveRoomId,
+        sessionId,
+        role: socket.role,
+        status: 'CONNECTED',
+        students: roomStudentsCount,
+        participantsCount: roomStudentsCount,
+        participants: roomParticipants,
+      });
+
+      // Emit current state + server time sync
       const { eventStates, _lastPersist, ...publicSessionState } = sessionState;
       socket.emit('session_state', { ...publicSessionState, serverNow: Date.now() });
       socket.emit('SESSION_TIMER_SYNC', {
@@ -459,16 +608,127 @@ function initProctorSocket(io) {
         status: sessionState.status,
       });
 
-      // Notify room
-      io.to(roomName).emit('room_participants_updated', {
-        participantsCount: sessionState.participants.length,
-        participants: sessionState.participants,
-      });
+      const updatePayload = {
+        roomId: effectiveRoomId,
+        students: roomStudentsCount,
+        activeStudents: roomActiveStudentsCount,
+        participantsCount: roomStudentsCount,
+        participants: roomParticipants,
+      };
+
+      io.to(roomName).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+      io.to(roomName).emit('room_participants_updated', updatePayload);
+
       if (effectiveRoomId) {
-        io.to(`proctor:${effectiveRoomId}`).emit('room_participants_updated', {
-          participantsCount: sessionState.participants.length,
-          participants: sessionState.participants,
-        });
+        io.to(`room:${effectiveRoomId}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+        io.to(`proctor:${effectiveRoomId}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+        io.to(`room_${effectiveRoomId}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+        io.to(`proctor:${effectiveRoomId}`).emit('room_participants_updated', updatePayload);
+        io.to(`room_${effectiveRoomId}`).emit('room_participants_updated', updatePayload);
+      }
+    };
+
+    socket.on('ROOM_JOIN', handleJoin);
+    socket.on('join_room', handleJoin);
+
+    // Monitoring lifecycle events: MONITORING_STARTED and MONITORING_STOPPED
+    socket.on('MONITORING_STARTED', async (data) => {
+      const sessionId = data?.sessionId || socket.sessionId;
+      const roomId = data?.roomId || socket.roomId;
+      const candidateId = data?.candidateId || data?.userId || socket.authUser?.id || socket.id;
+
+      if (sessionId) {
+        const session = activeSessions.get(sessionId);
+        if (session) {
+          const p = session.participants.find((part) => part.id === candidateId || part.socketId === socket.id);
+          if (p) {
+            p.status = 'MONITORING';
+            p.monitoringStatus = 'ACTIVE';
+          }
+        }
+        const effRoom = roomId || (session && session.roomId);
+        if (effRoom) {
+          const studentParticipants = (session?.participants || []).filter((p) => p.role === 'participant' && p.status !== 'LEFT');
+          const activeStudents = studentParticipants.filter((p) => p.status === 'MONITORING');
+          const payload = {
+            roomId: effRoom,
+            sessionId,
+            candidateId,
+            status: 'MONITORING',
+            monitoringStatus: 'ACTIVE',
+            students: studentParticipants.length,
+            activeStudents: activeStudents.length,
+            participantsCount: studentParticipants.length,
+          };
+          io.to(`room:${effRoom}`).emit('MONITORING_STARTED', payload);
+          io.to(`proctor:${effRoom}`).emit('MONITORING_STARTED', payload);
+          const updatePayload = {
+            roomId: effRoom,
+            students: studentParticipants.length,
+            activeStudents: activeStudents.length,
+            participantsCount: studentParticipants.length,
+            participants: session?.participants || [],
+          };
+          io.to(`room:${effRoom}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+          io.to(`proctor:${effRoom}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+          io.to(`proctor:${effRoom}`).emit('room_participants_updated', updatePayload);
+
+          try {
+            await Room.findOneAndUpdate(
+              { roomId: effRoom.toUpperCase(), 'participants.id': candidateId },
+              {
+                $set: {
+                  'participants.$.status': 'MONITORING',
+                  'participants.$.monitoringStatus': 'ACTIVE',
+                  activeStudents: activeStudents.length,
+                },
+              }
+            );
+          } catch (_) {}
+        }
+      }
+    });
+
+    socket.on('MONITORING_STOPPED', async (data) => {
+      const sessionId = data?.sessionId || socket.sessionId;
+      const roomId = data?.roomId || socket.roomId;
+      const candidateId = data?.candidateId || data?.userId || socket.authUser?.id || socket.id;
+
+      if (sessionId) {
+        const session = activeSessions.get(sessionId);
+        if (session) {
+          const p = session.participants.find((part) => part.id === candidateId || part.socketId === socket.id);
+          if (p) {
+            p.status = 'COMPLETED';
+            p.monitoringStatus = 'STOPPED';
+          }
+        }
+        const effRoom = roomId || (session && session.roomId);
+        if (effRoom) {
+          const studentParticipants = (session?.participants || []).filter((p) => p.role === 'participant' && p.status !== 'LEFT');
+          const activeStudents = studentParticipants.filter((p) => p.status === 'MONITORING');
+          const payload = {
+            roomId: effRoom,
+            sessionId,
+            candidateId,
+            status: 'COMPLETED',
+            monitoringStatus: 'STOPPED',
+            students: studentParticipants.length,
+            activeStudents: activeStudents.length,
+            participantsCount: studentParticipants.length,
+          };
+          io.to(`room:${effRoom}`).emit('MONITORING_STOPPED', payload);
+          io.to(`proctor:${effRoom}`).emit('MONITORING_STOPPED', payload);
+          const updatePayload = {
+            roomId: effRoom,
+            students: studentParticipants.length,
+            activeStudents: activeStudents.length,
+            participantsCount: studentParticipants.length,
+            participants: session?.participants || [],
+          };
+          io.to(`room:${effRoom}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+          io.to(`proctor:${effRoom}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+        }
       }
     });
 
@@ -636,9 +896,21 @@ function initProctorSocket(io) {
       // Repeat detections of an already-open lifecycle are suppressed (no spam),
       // and CLEARED closes the lifecycle with an informational alert.
       if (!session.eventStates) session.eventStates = {};
+      if (!session.eventCooldowns) session.eventCooldowns = {};
       const eventStates = session.eventStates;
 
       let shouldCreate = true;
+
+      // Gate on AI engine flags: if the engine marked it as unconfirmed, observing, or in cooldown, do not alert
+      if (!resolving) {
+        if (eventData.should_alert === false || (metadata && metadata.should_alert === false) || eventData.in_cooldown === true) {
+          shouldCreate = false;
+        }
+        if (state === 'OBSERVING' || state === 'COOLDOWN') {
+          shouldCreate = false;
+        }
+      }
+
       if (lifecycleKey) {
         const st = eventStates[lifecycleKey];
         // Safety valve: expire stuck DETECTED states so later detections re-alert.
@@ -653,9 +925,14 @@ function initProctorSocket(io) {
             st.status = 'CLEARED';
             st.lastSeen = nowMs;
           }
-        } else {
-          if (!st || st.status === 'CLEARED') {
+        } else if (shouldCreate) {
+          const cooldownMs = EVENT_COOLDOWN_MS[normalizedType] || EVENT_COOLDOWN_MS.DEFAULT || 8000;
+          const lastAlerted = session.eventCooldowns[lifecycleKey] || 0;
+          if (nowMs - lastAlerted < cooldownMs) {
+            shouldCreate = false;
+          } else if (!st || st.status === 'CLEARED') {
             eventStates[lifecycleKey] = { status: 'DETECTED', firstSeen: nowMs, lastSeen: nowMs };
+            session.eventCooldowns[lifecycleKey] = nowMs;
             shouldCreate = true;
           } else {
             // Already-open lifecycle: suppress the duplicate alert entirely.
@@ -663,23 +940,33 @@ function initProctorSocket(io) {
             shouldCreate = false;
           }
         }
+      } else if (!resolving && shouldCreate) {
+        const cooldownMs = EVENT_COOLDOWN_MS[normalizedType] || EVENT_COOLDOWN_MS.DEFAULT || 8000;
+        const lastAlerted = session.eventCooldowns[normalizedType] || 0;
+        if (nowMs - lastAlerted < cooldownMs) {
+          shouldCreate = false;
+        } else {
+          session.eventCooldowns[normalizedType] = nowMs;
+        }
       }
 
-      if (!shouldCreate) return; // duplicate of an open lifecycle — never re-alert
+      if (!shouldCreate) return; // duplicate of an open lifecycle or in cooldown — never re-alert
 
       const eventId = makeEventId();
       const meta = buildAlertMeta(Number(captureTimestamp));
       meta.priority = SEVERITY_PRIORITY[severity] || 'P3';
 
-      // Participant identity is derived from the socket's join record — a
-      // client-supplied participantId is never trusted.
+      const effectiveRoomId = session.roomId || (sessionId.startsWith('TRV-') ? (sessionId.startsWith('TRV-TRV-') ? sessionId.split('-').slice(1, 3).join('-') : sessionId.split('-').slice(0, 2).join('-')) : null);
       const joinedParticipant = session.participants.find((p) => p.socketId === socket.id);
       const rawEvidence = evidence || message || description || `AI detected ${normalizedType}`;
       const newAlert = {
         eventId,
         id: eventId,
         sessionId,
+        roomId: effectiveRoomId,
         participantId: (joinedParticipant && joinedParticipant.id) || socket.id,
+        userId: (joinedParticipant && joinedParticipant.id) || socket.id,
+        candidateName: (joinedParticipant && joinedParticipant.name) || 'Candidate',
         timestamp: new Date().toISOString(),
         eventType: normalizedType,
         type: normalizedType,
@@ -723,7 +1010,6 @@ function initProctorSocket(io) {
         session.aiEngineOnline = false;
       }
 
-      const effectiveRoomId = session.roomId || (sessionId.startsWith('TRV-') ? sessionId.split('-').slice(0, 2).join('-') : null);
       const riskScore = Math.max(0, 100 - session.trustScore);
       const riskLevel = riskScore > 60 ? 'HIGH' : riskScore > 20 ? 'MEDIUM' : 'NORMAL';
 
@@ -745,6 +1031,7 @@ function initProctorSocket(io) {
       const canonicalProctorEvent = {
         id: eventId,
         sessionId,
+        roomId: effectiveRoomId,
         timestamp: newAlert.timestamp,
         type: normalizedType,
         eventType: normalizedType,
@@ -766,8 +1053,8 @@ function initProctorSocket(io) {
       io.to(`session:${sessionId}`).emit('proctor:event', canonicalProctorEvent);
       io.to(roomName).emit('AI_EVENT', newAlert);
       io.to(`session:${sessionId}`).emit('AI_EVENT', newAlert);
-      io.to(roomName).emit('ALERT_CREATED', newAlert);
-      io.to(`session:${sessionId}`).emit('ALERT_CREATED', newAlert);
+      io.to(roomName).emit(resolving ? 'ALERT_UPDATED' : 'ALERT_CREATED', newAlert);
+      io.to(`session:${sessionId}`).emit(resolving ? 'ALERT_UPDATED' : 'ALERT_CREATED', newAlert);
       io.to(roomName).emit('proctor_alert', proctorAlertPayload);
       io.to(`session:${sessionId}`).emit('proctor_alert', proctorAlertPayload);
       io.to(roomName).emit('TRUST_SCORE_UPDATED', { trustScore: session.trustScore });
@@ -776,11 +1063,25 @@ function initProctorSocket(io) {
       io.to(`session:${sessionId}`).emit('RISK_SCORE_UPDATED', { riskScore, riskLevel });
 
       if (effectiveRoomId) {
+        io.to(`room:${effectiveRoomId}`).emit('AI_EVENT', newAlert);
+        io.to(`room:${effectiveRoomId}`).emit(resolving ? 'ALERT_UPDATED' : 'ALERT_CREATED', newAlert);
+        io.to(`room:${effectiveRoomId}`).emit('proctor_alert', proctorAlertPayload);
+        io.to(`room:${effectiveRoomId}`).emit('proctor:event', canonicalProctorEvent);
         io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', proctorAlertPayload);
         io.to(`room:proctor:${effectiveRoomId}`).emit('proctor_alert', proctorAlertPayload);
         io.to(`room_${effectiveRoomId}`).emit('proctor_alert', proctorAlertPayload);
         io.to(`proctor:${effectiveRoomId}`).emit('AI_EVENT', newAlert);
+        io.to(`proctor:${effectiveRoomId}`).emit(resolving ? 'ALERT_UPDATED' : 'ALERT_CREATED', newAlert);
         io.to(`proctor:${effectiveRoomId}`).emit('proctor:event', canonicalProctorEvent);
+        io.to(`room:${effectiveRoomId}`).emit('participant_risk_updated', {
+          roomId: effectiveRoomId,
+          sessionId,
+          candidateId: proctorAlertPayload.candidateId,
+          candidateName: proctorAlertPayload.candidateName,
+          riskScore,
+          riskLevel,
+          violations: session.alertCount,
+        });
         io.to(`proctor:${effectiveRoomId}`).emit('participant_risk_updated', {
           roomId: effectiveRoomId,
           sessionId,
@@ -799,6 +1100,21 @@ function initProctorSocket(io) {
           riskLevel,
           violations: session.alertCount,
         });
+
+        // Update MongoDB Room stats
+        const isCrit = ['CRITICAL', 'HIGH'].includes(String(newAlert.severity).toUpperCase());
+        Room.findOneAndUpdate(
+          { roomId: effectiveRoomId.toUpperCase() },
+          {
+            $inc: { alerts: 1, ...(isCrit ? { criticalAlerts: 1 } : {}) },
+            $set: {
+              'participants.$[elem].riskScore': riskScore,
+              'participants.$[elem].riskLevel': riskLevel,
+              'participants.$[elem].violations': session.alertCount,
+            }
+          },
+          { arrayFilters: [{ 'elem.id': proctorAlertPayload.candidateId }] }
+        ).catch(() => {});
       }
 
       // Persist asynchronously; never block live alert delivery on a DB write.
@@ -838,9 +1154,61 @@ function initProctorSocket(io) {
     };
 
     socket.on('ai_event', handleAiEvent);
+    socket.on('AI_EVENT', handleAiEvent);
+    socket.on('ALERT_CREATED', handleAiEvent);
+    socket.on('ALERT_UPDATED', handleAiEvent);
     socket.on('proctor:event', handleAiEvent);
     socket.on('proctor_alert', handleAiEvent);
     socket.on('alert', handleAiEvent);
+
+    // Browser Extension Ingestion Handlers
+    socket.on('extension_event', (eventData) => {
+      handleAiEvent(eventData);
+    });
+
+    socket.on('extension_heartbeat', (data) => {
+      if (!data?.sessionId) return;
+      const session = activeSessions.get(data.sessionId);
+      if (session) {
+        session.lastHeartbeat = Date.now();
+        const participant = session.participants.find((p) => p.socketId === socket.id || p.id === data.participantId);
+        if (participant) {
+          participant.lastHeartbeat = Date.now();
+          if (data.cameraState) participant.cameraState = data.cameraState;
+          if (data.microphoneState) participant.microphoneState = data.microphoneState;
+        }
+      }
+      socket.emit('extension_heartbeat_ack', { received: true, serverNow: Date.now() });
+    });
+
+    socket.on('extension_media_state', (data) => {
+      if (!data?.sessionId) return;
+      if (data.status === 'INTERRUPTED') {
+        const evtType = data.deviceType === 'microphone' ? 'MICROPHONE_INTERRUPTED' : 'CAMERA_INTERRUPTED';
+        handleAiEvent({
+          sessionId: data.sessionId,
+          eventType: evtType,
+          description: `${data.deviceType} access interrupted: ${data.reason || 'Hardware or permission stream stopped'}`,
+          confidence: 1.0,
+        });
+      }
+    });
+
+    socket.on('extension_tab_state', (data) => {
+      if (!data?.sessionId) return;
+      if (data.tabState === 'SWITCHED_AWAY' || data.tabState === 'HIDDEN') {
+        handleAiEvent({
+          sessionId: data.sessionId,
+          eventType: 'TAB_SWITCH_DETECTED',
+          description: data.reason || 'Candidate switched away from examination window',
+          confidence: 1.0,
+        });
+      }
+    });
+
+    socket.on('extension_command_result', (data) => {
+      console.log(`[ProctorSocket] Extension command result on ${data?.sessionId}: ${data?.commandType} -> ${data?.result}`);
+    });
 
     // Reviewer Action Controls & Voice Commands – SERVER-AUTHORITATIVE ROLE CHECK
     socket.on('reviewer_command', ({ sessionId, command, payload }) => {
@@ -963,7 +1331,106 @@ function initProctorSocket(io) {
       targetSocket.emit('webrtc_signal', { sessionId, sender: socket.id, signal });
     });
 
-    // Leave Room / Disconnect
+    // Explicit Leave Room event
+    const handleLeave = async ({ sessionId: rawSessionId, roomId: rawRoomId, candidateId, userId }) => {
+      const sessionId = rawSessionId || socket.sessionId;
+      const effectiveRoomId = rawRoomId || socket.roomId || (sessionId && sessionId.startsWith('TRV-') ? (sessionId.startsWith('TRV-TRV-') ? sessionId.split('-').slice(1, 3).join('-') : sessionId.split('-').slice(0, 2).join('-')) : null);
+
+      if (sessionId) {
+        const session = activeSessions.get(sessionId);
+        if (session) {
+          const targetId = candidateId || userId || (socket.authUser ? socket.authUser.id : null);
+          const leaving = session.participants.find((p) => (targetId && p.id === targetId) || p.socketId === socket.id);
+
+          if (leaving) {
+            if (reconnectTimers.has(leaving.id)) {
+              clearTimeout(reconnectTimers.get(leaving.id).timer);
+              reconnectTimers.delete(leaving.id);
+            }
+
+            leaving.status = 'LEFT';
+            leaving.connectionState = 'DISCONNECTED';
+            leaving.monitoringStatus = 'STOPPED';
+            leaving.leftAt = new Date().toISOString();
+            session.participants = session.participants.filter((p) => p.socketId !== socket.id && p.id !== leaving.id);
+
+            const remainingStudents = session.participants.filter((p) => p.role === 'participant' && p.status !== 'LEFT');
+            const activeStudents = remainingStudents.filter((p) => p.status === 'MONITORING');
+
+            const leftPayload = {
+              roomId: effectiveRoomId,
+              sessionId: session.sessionId,
+              candidateId: leaving.id,
+              studentId: leaving.id,
+              studentName: leaving.name,
+              name: leaving.name,
+              status: 'LEFT',
+              reason: 'LEFT_SESSION',
+              students: remainingStudents.length,
+              activeStudents: activeStudents.length,
+              participantsCount: remainingStudents.length,
+              participants: session.participants,
+              timestamp: new Date().toISOString(),
+            };
+
+            const updatePayload = {
+              roomId: effectiveRoomId,
+              students: remainingStudents.length,
+              activeStudents: activeStudents.length,
+              participantsCount: remainingStudents.length,
+              participants: session.participants,
+            };
+
+            io.to(`room_${session.sessionId}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+            io.to(`room_${session.sessionId}`).emit('room_participants_updated', updatePayload);
+
+            if (effectiveRoomId) {
+              io.to(`room:${effectiveRoomId}`).emit('ROOM_PARTICIPANT_LEFT', leftPayload);
+              io.to(`room:${effectiveRoomId}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+              io.to(`proctor:${effectiveRoomId}`).emit('ROOM_PARTICIPANT_LEFT', leftPayload);
+              io.to(`proctor:${effectiveRoomId}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+              io.to(`proctor:${effectiveRoomId}`).emit('participant_left', leftPayload);
+              io.to(`proctor:${effectiveRoomId}`).emit('STUDENT_LEFT', leftPayload);
+              io.to(`room_${effectiveRoomId}`).emit('room_participants_updated', updatePayload);
+
+              try {
+                const updatedRoom = await Room.findOneAndUpdate(
+                  { roomId: effectiveRoomId.toUpperCase(), 'participants.id': leaving.id },
+                  {
+                    $set: {
+                      'participants.$.status': 'LEFT',
+                      'participants.$.connectionState': 'DISCONNECTED',
+                      'participants.$.monitoringStatus': 'STOPPED',
+                      'participants.$.leftAt': new Date(),
+                    },
+                  },
+                  { new: true }
+                );
+                if (updatedRoom) {
+                  updatedRoom.students = updatedRoom.participants.filter((p) => p.status !== 'LEFT').length;
+                  updatedRoom.participantsCount = updatedRoom.students;
+                  updatedRoom.activeStudents = updatedRoom.participants.filter((p) => p.status === 'MONITORING').length;
+                  await updatedRoom.save();
+                }
+              } catch (_) {}
+            }
+
+            try {
+              await Session.findOneAndUpdate(
+                { sessionId: session.sessionId },
+                { $set: { status: 'COMPLETED', endTime: new Date() } }
+              );
+              generateSessionReport(session, { completedByTimer: false });
+            } catch (_) {}
+          }
+        }
+      }
+    };
+
+    socket.on('ROOM_LEAVE', handleLeave);
+    socket.on('leave_room', handleLeave);
+
+    // Leave Room / Disconnect with Graceful Reconnection
     socket.on('disconnect', async () => {
       const sessionId = socket.sessionId;
       const effectiveRoomId = socket.roomId || (sessionId && sessionId.startsWith('TRV-') ? (sessionId.startsWith('TRV-TRV-') ? sessionId.split('-').slice(1, 3).join('-') : sessionId.split('-').slice(0, 2).join('-')) : null);
@@ -972,98 +1439,166 @@ function initProctorSocket(io) {
         const session = activeSessions.get(sessionId);
         if (session) {
           const leaving = session.participants.find((p) => p.socketId === socket.id);
-          session.participants = session.participants.filter((p) => p.socketId !== socket.id);
 
-          // Evidence-based event: a participant leaving mid-session is recorded
           if (leaving && leaving.role === 'participant') {
-            const leftAlert = {
-              eventId: makeEventId(),
-              sessionId: session.sessionId,
-              roomId: effectiveRoomId,
-              participantId: leaving.id,
-              candidateName: leaving.name || 'Participant',
-              timestamp: new Date().toISOString(),
-              eventType: 'PARTICIPANT_LEFT',
-              type: 'PARTICIPANT_LEFT',
-              severity: evaluateEventSeverity('PARTICIPANT_LEFT', session.sessionType) || 'LOW',
-              confidence: 1.0,
-              description: `${leaving.name || 'Participant'} disconnected from the monitored session.`,
-              message: `${leaving.name || 'Participant'} disconnected from the monitored session.`,
-              status: 'OPEN',
-              state: 'DETECTED',
-              ...buildAlertMeta(),
-              priority: 'P3',
-            };
-            session.alerts.unshift(leftAlert);
-            if (session.alerts.length > 200) session.alerts.pop();
-            session.alertCount += 1;
-            persistAlert(leftAlert);
+            const pId = leaving.id;
 
-            io.to(`room_${session.sessionId}`).emit('AI_EVENT', leftAlert);
-            io.to(`session:${session.sessionId}`).emit('AI_EVENT', leftAlert);
-            io.to(`room_${session.sessionId}`).emit('ALERT_CREATED', leftAlert);
-            io.to(`session:${session.sessionId}`).emit('ALERT_CREATED', leftAlert);
+            // Mark participant as RECONNECTING immediately
+            leaving.connectionState = 'RECONNECTING';
+
+            const currentStudents = session.participants.filter((p) => p.role === 'participant' && p.status !== 'LEFT');
+            const activeStudents = currentStudents.filter((p) => p.status === 'MONITORING');
+
+            const reconnectingPayload = {
+              roomId: effectiveRoomId,
+              sessionId: session.sessionId,
+              candidateId: leaving.id,
+              studentId: leaving.id,
+              studentName: leaving.name,
+              status: leaving.status,
+              connectionState: 'RECONNECTING',
+              students: currentStudents.length,
+              activeStudents: activeStudents.length,
+              participantsCount: currentStudents.length,
+              participants: session.participants,
+            };
+
+            const updatePayload = {
+              roomId: effectiveRoomId,
+              students: currentStudents.length,
+              activeStudents: activeStudents.length,
+              participantsCount: currentStudents.length,
+              participants: session.participants,
+            };
+
+            io.to(`room_${session.sessionId}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+            io.to(`session:${session.sessionId}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
 
             if (effectiveRoomId) {
+              io.to(`room:${effectiveRoomId}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+              io.to(`room:${effectiveRoomId}`).emit('ROOM_PARTICIPANT_RECONNECTING', reconnectingPayload);
+              io.to(`proctor:${effectiveRoomId}`).emit('ROOM_PARTICIPANTS_UPDATED', updatePayload);
+              io.to(`proctor:${effectiveRoomId}`).emit('room_participants_updated', updatePayload);
+            }
+
+            // Start 10-second grace timer for reconnection
+            const recTimer = setTimeout(async () => {
+              reconnectTimers.delete(pId);
+              leaving.status = 'LEFT';
+              leaving.connectionState = 'DISCONNECTED';
+              leaving.monitoringStatus = 'STOPPED';
+              leaving.leftAt = new Date().toISOString();
+              session.participants = session.participants.filter((p) => p.socketId !== socket.id && p.id !== pId);
+
+              const remainingStudents = session.participants.filter((p) => p.role === 'participant' && p.status !== 'LEFT');
+              const remainingActiveStudents = remainingStudents.filter((p) => p.status === 'MONITORING');
+
+              const leftAlert = {
+                eventId: makeEventId(),
+                sessionId: session.sessionId,
+                roomId: effectiveRoomId,
+                participantId: leaving.id,
+                userId: leaving.id,
+                candidateName: leaving.name || 'Participant',
+                timestamp: new Date().toISOString(),
+                eventType: 'PARTICIPANT_LEFT',
+                type: 'PARTICIPANT_LEFT',
+                severity: evaluateEventSeverity('PARTICIPANT_LEFT', session.sessionType) || 'LOW',
+                confidence: 1.0,
+                description: `${leaving.name || 'Participant'} disconnected from the monitored session.`,
+                message: `${leaving.name || 'Participant'} disconnected from the monitored session.`,
+                status: 'OPEN',
+                state: 'DETECTED',
+                ...buildAlertMeta(),
+                priority: 'P3',
+              };
+              session.alerts.unshift(leftAlert);
+              if (session.alerts.length > 200) session.alerts.pop();
+              session.alertCount += 1;
+              persistAlert(leftAlert);
+
               const leftPayload = {
                 roomId: effectiveRoomId,
                 sessionId: session.sessionId,
                 candidateId: leaving.id,
+                studentId: leaving.id,
+                studentName: leaving.name,
                 name: leaving.name,
                 status: 'LEFT',
                 reason: 'DISCONNECTED',
+                students: remainingStudents.length,
+                activeStudents: remainingActiveStudents.length,
+                participantsCount: remainingStudents.length,
+                participants: session.participants,
                 timestamp: new Date().toISOString(),
               };
-              io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', leftAlert);
-              io.to(`room_${effectiveRoomId}`).emit('proctor_alert', leftAlert);
-              io.to(`room:proctor:${effectiveRoomId}`).emit('proctor_alert', leftAlert);
-              io.to(`proctor:${effectiveRoomId}`).emit('participant_left', leftPayload);
-              io.to(`room_${effectiveRoomId}`).emit('participant_left', leftPayload);
-              io.to(`room:proctor:${effectiveRoomId}`).emit('participant_left', leftPayload);
-            }
-          }
 
-          io.to(`room_${socket.sessionId}`).emit('room_participants_updated', {
-            participantsCount: session.participants.length,
-            participants: session.participants,
-          });
+              const finalUpdatePayload = {
+                roomId: effectiveRoomId,
+                students: remainingStudents.length,
+                activeStudents: remainingActiveStudents.length,
+                participantsCount: remainingStudents.length,
+                participants: session.participants,
+              };
 
-          if (effectiveRoomId) {
-            io.to(`proctor:${effectiveRoomId}`).emit('room_participants_updated', {
-              participantsCount: session.participants.length,
-              participants: session.participants,
-            });
-            io.to(`room_${effectiveRoomId}`).emit('room_participants_updated', {
-              participantsCount: session.participants.length,
-              participants: session.participants,
-            });
+              io.to(`room_${session.sessionId}`).emit('AI_EVENT', leftAlert);
+              io.to(`session:${session.sessionId}`).emit('AI_EVENT', leftAlert);
+              io.to(`room_${session.sessionId}`).emit('ALERT_CREATED', leftAlert);
+              io.to(`session:${session.sessionId}`).emit('ALERT_CREATED', leftAlert);
+              io.to(`room_${session.sessionId}`).emit('ROOM_PARTICIPANTS_UPDATED', finalUpdatePayload);
 
-            // Update participant in MongoDB Room
-            try {
-              const updatedRoom = await Room.findOneAndUpdate(
-                {
-                  $or: [
-                    { roomId: effectiveRoomId.toUpperCase() },
-                    { joinCode: effectiveRoomId.toUpperCase() }
-                  ],
-                  'participants.id': leaving?.id
-                },
-                { $set: { 'participants.$.status': 'LEFT', 'participants.$.leftAt': new Date() } },
-                { new: true }
-              );
-              if (updatedRoom) {
-                updatedRoom.participantsCount = updatedRoom.participants.filter(p => p.status !== 'LEFT').length;
-                await updatedRoom.save();
-                io.to(`proctor:${effectiveRoomId}`).emit('room_participants_updated', {
-                  participantsCount: updatedRoom.participantsCount,
-                  participants: updatedRoom.participants,
-                });
-                io.to(`room_${effectiveRoomId}`).emit('room_participants_updated', {
-                  participantsCount: updatedRoom.participantsCount,
-                  participants: updatedRoom.participants,
-                });
+              if (effectiveRoomId) {
+                io.to(`room:${effectiveRoomId}`).emit('ROOM_PARTICIPANT_LEFT', leftPayload);
+                io.to(`room:${effectiveRoomId}`).emit('ROOM_PARTICIPANTS_UPDATED', finalUpdatePayload);
+                io.to(`proctor:${effectiveRoomId}`).emit('ROOM_PARTICIPANT_LEFT', leftPayload);
+                io.to(`proctor:${effectiveRoomId}`).emit('ROOM_PARTICIPANTS_UPDATED', finalUpdatePayload);
+                io.to(`proctor:${effectiveRoomId}`).emit('proctor_alert', leftAlert);
+                io.to(`proctor:${effectiveRoomId}`).emit('participant_left', leftPayload);
+                io.to(`proctor:${effectiveRoomId}`).emit('STUDENT_LEFT', leftPayload);
+                io.to(`room_${effectiveRoomId}`).emit('room_participants_updated', finalUpdatePayload);
+
+                try {
+                  const updatedRoom = await Room.findOneAndUpdate(
+                    {
+                      $or: [
+                        { roomId: effectiveRoomId.toUpperCase() },
+                        { joinCode: effectiveRoomId.toUpperCase() },
+                      ],
+                      'participants.id': leaving.id,
+                    },
+                    {
+                      $set: {
+                        'participants.$.status': 'LEFT',
+                        'participants.$.connectionState': 'DISCONNECTED',
+                        'participants.$.monitoringStatus': 'STOPPED',
+                        'participants.$.leftAt': new Date(),
+                      },
+                    },
+                    { new: true }
+                  );
+                  if (updatedRoom) {
+                    updatedRoom.students = updatedRoom.participants.filter((p) => p.status !== 'LEFT').length;
+                    updatedRoom.participantsCount = updatedRoom.students;
+                    updatedRoom.activeStudents = updatedRoom.participants.filter((p) => p.status === 'MONITORING').length;
+                    await updatedRoom.save();
+                  }
+                } catch (_) {}
               }
-            } catch (_) {}
+
+              // Finalize session and generate report
+              try {
+                await Session.findOneAndUpdate(
+                  { sessionId: session.sessionId },
+                  { $set: { status: 'COMPLETED', endTime: new Date() } }
+                );
+                generateSessionReport(session, { completedByTimer: false });
+              } catch (_) {}
+            }, 10000);
+
+            reconnectTimers.set(pId, { timer: recTimer, sessionId: session.sessionId, roomId: effectiveRoomId, participant: leaving });
+          } else {
+            // Non-participant (reviewer / host) disconnects
+            session.participants = session.participants.filter((p) => p.socketId !== socket.id);
           }
         }
       }

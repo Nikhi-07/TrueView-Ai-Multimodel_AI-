@@ -74,6 +74,9 @@ class UnifiedDecisionEngine:
             current_active_types.add(evt_type)
             reasons.append(evt.get("evidence") or evt.get("message") or f"Violation detected: {evt_type}")
 
+        for v_type in behaviour_summary.get("active_violation_types", []):
+            current_active_types.add(v_type)
+
         # Transition detection: newly activated events increment risk score ONCE
         prev_active: Set[str] = st["active_event_types"]
         newly_activated = current_active_types - prev_active

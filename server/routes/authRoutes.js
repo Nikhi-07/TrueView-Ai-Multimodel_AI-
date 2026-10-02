@@ -15,6 +15,7 @@ const {
   faceLogin,
   voiceLogin,
   verifySessionFace,
+  extensionLogin,
   getMe
 } = require('../controllers/authController');
 const { authLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
@@ -23,6 +24,7 @@ const { protect, protectPending } = require('../middleware/authMiddleware');
 router.get('/me', protect, getMe);
 router.post('/register', authLimiter, register);
 router.post('/login', authLimiter, login);
+router.post('/extension-login', authLimiter, extensionLogin);
 router.post('/verify-credentials', authLimiter, verifyCredentials);
 router.post('/face-login', authLimiter, faceLogin);
 router.post('/voice-login', authLimiter, voiceLogin);

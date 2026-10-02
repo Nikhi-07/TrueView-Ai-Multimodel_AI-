@@ -485,8 +485,8 @@ export default function ReviewerProctorRoom({ room, user, onExit }) {
 
               {/* HUD Overlays */}
               <div className="absolute top-3 left-3 bg-black/80 backdrop-blur-md px-2.5 py-1 rounded-lg border border-zinc-800 text-[11px] font-mono text-emerald-400 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span>AI SURVEILLANCE ACTIVE</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>AI MONITORING • MODE: MODERATE</span>
               </div>
 
               <div className="absolute top-3 right-3 bg-black/80 backdrop-blur-md px-2.5 py-1 rounded-lg border border-zinc-800 text-[11px] font-mono text-zinc-300 flex items-center gap-2">

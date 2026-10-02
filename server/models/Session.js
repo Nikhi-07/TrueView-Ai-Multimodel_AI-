@@ -50,6 +50,8 @@ const sessionSchema = new mongoose.Schema(
     tabSwitchEvents: [
       {
         timestamp: { type: Date, default: Date.now },
+        episodeId: { type: String, default: null },
+        hiddenDuration: { type: Number, default: null },
         count: { type: Number, default: 0 },
         maxAllowed: { type: Number, default: 3 },
         severity: { type: String, default: 'MEDIUM' },
@@ -188,6 +190,11 @@ const sessionSchema = new mongoose.Schema(
         evidence: { type: String, default: '' },
       }
     ],
+    source: {
+      type: String,
+      enum: ['WEB', 'EXTENSION', 'API', 'UNKNOWN'],
+      default: 'WEB',
+    },
   },
   {
     timestamps: true,

@@ -41,8 +41,11 @@ class ObjectDetectionService:
         """
         start_time = time.time()
         
-        # 1. Decode Image
-        frame = self._decode_image(image_data)
+        # 1. Decode Image (or reuse already-decoded numpy array)
+        if isinstance(image_data, np.ndarray):
+            frame = image_data
+        else:
+            frame = self._decode_image(image_data)
         if frame is None:
             return {"error": "Failed to decode frame data"}
             

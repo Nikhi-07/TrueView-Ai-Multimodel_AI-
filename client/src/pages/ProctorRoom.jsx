@@ -12,7 +12,8 @@ export default function ProctorRoom() {
   const { user, isAuthenticated, loading: authLoading } = useAuth();
 
   const roleParam = searchParams.get('role');
-  const isReviewerMode = roleParam === 'reviewer' || roleParam === 'host' || user?.role === 'admin' || user?.role === 'host';
+  const isCandidate = roleParam === 'candidate' || roleParam === 'student' || roleParam === 'participant';
+  const isReviewerMode = !isCandidate && (roleParam === 'reviewer' || roleParam === 'host');
 
   const paramSessionId = searchParams.get('sessionId');
   const token = (searchParams.get('token') || '').trim();

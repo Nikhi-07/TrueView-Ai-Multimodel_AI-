@@ -9,7 +9,7 @@ import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 
 const MODE_LABELS = {
-  EXAM: { label: 'Examination (Strict)', badge: 'bg-[#EFF6FF] text-[#2563EB] border-[#BFDBFE]' },
+  EXAM: { label: 'Examination (Moderate)', badge: 'bg-[#EFF6FF] text-[#2563EB] border-[#BFDBFE]' },
   INTERVIEW: { label: 'Interview (Conversational)', badge: 'bg-[#EFF6FF] text-[#2563EB] border-[#BFDBFE]' },
   ONLINE_CLASS: { label: 'Online Class (Lecture)', badge: 'bg-[#EFF6FF] text-[#2563EB] border-[#BFDBFE]' },
   CLASS: { label: 'Class / Lecture', badge: 'bg-[#EFF6FF] text-[#2563EB] border-[#BFDBFE]' },

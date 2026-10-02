@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   X, Printer, Shield, CheckCircle2, AlertTriangle, 
@@ -7,16 +7,68 @@ import {
 import api from '../../services/api';
 import ReportPrintDocument from '../Reports/ReportPrintDocument';
 
+const formatTimeSafe = (dateVal) => {
+  if (!dateVal) return 'N/A';
+  try {
+    const d = new Date(dateVal);
+    return isNaN(d.getTime()) ? 'N/A' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch (_) {
+    return 'N/A';
+  }
+};
+
+const formatDateSafe = (dateVal) => {
+  if (!dateVal) return 'N/A';
+  try {
+    const d = new Date(dateVal);
+    return isNaN(d.getTime()) ? 'N/A' : d.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch (_) {
+    return 'N/A';
+  }
+};
+
 export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId }) {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  const fetchReport = useCallback(async () => {
+    setLoading(true);
+    try {
+      if (reportId) {
+        const res = await api.get(`/reports/${reportId}`);
+        if (res.data?.success && res.data.report) {
+          setReport(res.data.report);
+          return;
+        }
+      }
+      
+      // Query reports list by sessionId if reportId not provided
+      const res = await api.get('/reports');
+      if (res.data?.success && Array.isArray(res.data.reports)) {
+        const match = res.data.reports.find(r => r.reportId === reportId || r.sessionId === sessionId);
+        if (match) {
+          setReport(match);
+        } else if (sessionId) {
+          // Trigger generation
+          const genRes = await api.post('/reports/generate', { sessionId });
+          if (genRes.data?.success) setReport(genRes.data.report);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch report detail", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [reportId, sessionId]);
+
+  // Hook 1: Fetch report on open
   useEffect(() => {
     if (isOpen && (reportId || sessionId)) {
       fetchReport();
     }
-  }, [isOpen, reportId, sessionId]);
+  }, [isOpen, reportId, sessionId, fetchReport]);
 
+  // Hook 2: Manage print class and afterprint listeners
   useEffect(() => {
     if (isOpen && report) {
       document.body.classList.add('has-active-report-print');
@@ -40,56 +92,11 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
     };
   }, [isOpen, report]);
 
-  const fetchReport = async () => {
-    setLoading(true);
-    try {
-      if (reportId) {
-        const res = await api.get(`/reports/${reportId}`);
-        if (res.data.success && res.data.report) {
-          setReport(res.data.report);
-          return;
-        }
-      }
-      
-      // Query reports list by sessionId if reportId not provided
-      const res = await api.get('/reports');
-      if (res.data.success && Array.isArray(res.data.reports)) {
-        const match = res.data.reports.find(r => r.reportId === reportId || r.sessionId === sessionId);
-        if (match) {
-          setReport(match);
-        } else if (sessionId) {
-          // Trigger generation
-          const genRes = await api.post('/reports/generate', { sessionId });
-          if (genRes.data.success) setReport(genRes.data.report);
-        }
-      }
-    } catch (err) {
-      console.error("Failed to fetch report detail", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handlePrint = () => {
-    if (!report) return;
-    document.body.classList.add('has-active-report-print');
-    requestAnimationFrame(() => {
-      window.print();
-    });
-  };
-
-  if (!isOpen) return null;
-
-  const score = report?.overallIntegrityScore ?? 100;
-  const status = report?.verdict || report?.status || (score >= 85 ? 'PASSED' : score >= 60 ? 'REVIEW_REQUIRED' : 'FLAGGED');
-  const durationSec = report?.durationSeconds || 0;
-  const durationMin = Math.floor(durationSec / 60);
-  const durationSecRem = durationSec % 60;
-  const durationStr = `${durationMin}m ${durationSecRem.toString().padStart(2, '0')}s`;
-  
+  // Hook 3: Combined chronological timeline — MUST be defined unconditionally at top level
   const combinedTimeline = useMemo(() => {
-    const list = [...(report?.timeline || [])];
-    if (Array.isArray(report?.tabSwitchTimeline)) {
+    if (!report) return [];
+    const list = [...(Array.isArray(report.timeline) ? report.timeline : [])];
+    if (Array.isArray(report.tabSwitchTimeline)) {
       report.tabSwitchTimeline.forEach(t => {
         list.push({
           eventType: t.eventType || (t.count >= 4 ? 'TAB_SWITCH_LIMIT_EXCEEDED' : 'TAB_SWITCH_DETECTED'),
@@ -102,11 +109,29 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
     return list.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
   }, [report]);
 
+  const handlePrint = () => {
+    if (!report) return;
+    document.body.classList.add('has-active-report-print');
+    requestAnimationFrame(() => {
+      window.print();
+    });
+  };
+
+  // Safe early exit AFTER all hooks are called
+  if (!isOpen) return null;
+
+  const score = report?.overallIntegrityScore ?? 100;
+  const status = report?.verdict || report?.status || (score >= 85 ? 'PASSED' : score >= 60 ? 'REVIEW_REQUIRED' : 'FLAGGED');
+  const durationSec = report?.durationSeconds || 0;
+  const durationMin = Math.floor(durationSec / 60);
+  const durationSecRem = durationSec % 60;
+  const durationStr = durationMin > 0 ? `${durationMin}m ${durationSecRem.toString().padStart(2, '0')}s` : `${durationSecRem}s`;
+  
   const timeline = combinedTimeline;
   const printRoot = typeof document !== 'undefined' ? (document.getElementById('report-print-root') || document.body) : null;
 
-  const startTimeStr = report?.startTime ? new Date(report.startTime).toLocaleTimeString() : 'N/A';
-  const endTimeStr = report?.endTime ? new Date(report.endTime).toLocaleTimeString() : 'N/A';
+  const startTimeStr = formatTimeSafe(report?.startTime);
+  const endTimeStr = formatTimeSafe(report?.endTime);
 
   return (
     <>
@@ -128,14 +153,14 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
           <div className="flex items-center gap-2">
             <button
               onClick={handlePrint}
-              className="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 text-slate-700 transition-colors flex items-center gap-1.5 text-xs font-semibold shadow-xs"
+              className="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 text-slate-700 transition-colors flex items-center gap-1.5 text-xs font-semibold shadow-xs cursor-pointer"
               title="Print Report"
             >
               <Printer size={14} className="text-slate-600" /> Print / Save as PDF
             </button>
             <button
               onClick={onClose}
-              className="p-2 rounded-lg hover:bg-slate-200 text-slate-400 hover:text-slate-700 transition-colors"
+              className="p-2 rounded-lg hover:bg-slate-200 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
             >
               <X size={18} />
             </button>
@@ -194,7 +219,7 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
                   <User size={13} className="text-blue-600 print:text-black shrink-0" />
                   {report.userName || 'Candidate'}
                 </span>
-                <span className="text-[11px] text-slate-500 print:text-gray-600 block mt-0.5 truncate">{report.userEmail}</span>
+                <span className="text-[11px] text-slate-500 print:text-gray-600 block mt-0.5 truncate">{report.userEmail || 'N/A'}</span>
               </div>
 
               <div>
@@ -374,7 +399,7 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
                         </div>
                       </div>
                       <span className="font-mono text-[10px] text-slate-500 print:text-gray-500 shrink-0">
-                        {evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : ''}
+                        {formatTimeSafe(evt.timestamp)}
                       </span>
                     </div>
                   ))}
@@ -395,14 +420,14 @@ export default function ReportDetailModal({ isOpen, onClose, reportId, sessionId
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50 print:hidden">
           <button
             onClick={handlePrint}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg flex items-center gap-2 transition-colors shadow-sm"
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
           >
             <Printer size={14} />
             Print / Save PDF
           </button>
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold rounded-lg transition-colors border border-slate-300"
+            className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold rounded-lg transition-colors border border-slate-300 cursor-pointer"
           >
             Close
           </button>

@@ -157,12 +157,53 @@ const verifyCredentials = async (req, res, next) => {
   }
 };
 
-// @desc    Password-only login block (Enforces Face Scan)
+// @desc    Authenticate user for Browser Extension
+// @route   POST /api/auth/extension-login
+// @access  Public
+const extensionLogin = async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Please provide email and password' });
+    }
+
+    const user = await User.findOne({ email }).select('+password');
+    if (!user || !(await user.matchPassword(password))) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    if (user.status !== 'Active') {
+      return res.status(403).json({ message: 'Account is suspended or inactive' });
+    }
+
+    const token = generateToken(user._id);
+
+    return res.json({
+      success: true,
+      message: 'Extension authentication successful',
+      token,
+      user: {
+        id: String(user._id),
+        name: user.fullName,
+        email: user.email,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Password-only login block (Enforces Face Scan for Web, allows direct Extension auth)
 // @route   POST /api/auth/login
 // @access  Public
 const login = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, isExtension } = req.body;
+    const isExtensionClient = Boolean(isExtension) || req.headers['x-client-type'] === 'extension';
+    if (isExtensionClient) {
+      return extensionLogin(req, res, next);
+    }
     return verifyCredentials(req, res, next);
   } catch (error) {
     next(error);
@@ -830,6 +871,7 @@ module.exports = {
   faceLogin,
   voiceLogin,
   verifySessionFace,
+  extensionLogin,
   getMe
 };
 

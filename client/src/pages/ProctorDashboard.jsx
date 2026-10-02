@@ -3,10 +3,12 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { 
   Shield, Video, Users, Search, RefreshCw, AlertCircle, AlertTriangle, 
   CheckCircle2, Clock, ArrowLeft, ExternalLink, FileText, Eye, Activity, 
-  Check, Copy, Share2, ChevronRight, Wifi, Bell, User, StopCircle, Radio
+  Check, Copy, Share2, ChevronRight, Wifi, Bell, User, StopCircle, Radio,
+  Maximize2, Minimize2, Link, ShieldCheck, X, Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { io } from 'socket.io-client';
+import toast from 'react-hot-toast';
 import PageHeader from '../components/Cards/PageHeader';
 import ParticipantDetailModal from '../components/Modals/ParticipantDetailModal';
 import ReportDetailModal from '../components/Modals/ReportDetailModal';
@@ -37,7 +39,13 @@ export default function ProctorDashboard() {
   const [roomLoading, setRoomLoading] = useState(false);
   const [endingRoom, setEndingRoom] = useState(false);
 
-  // Real-time Connection State (Section 12)
+  // Top Action & Toolbar State
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showEndExamModal, setShowEndExamModal] = useState(false);
+  const [copiedTopLink, setCopiedTopLink] = useState(false);
+  const [copiedMonitoringLink, setCopiedMonitoringLink] = useState(false);
+
+  // Real-time Connection State
   const [isConnected, setIsConnected] = useState(false);
 
   // Modals State
@@ -53,6 +61,21 @@ export default function ProctorDashboard() {
   useEffect(() => {
     selectedRoomIdRef.current = selectedRoomId;
   }, [selectedRoomId]);
+
+  // Listen to browser fullscreen changes (Esc key, browser buttons, etc.)
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement || document.webkitFullscreenElement));
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
+  }, []);
 
   // 1. Fetch overview rooms & alerts and initialize persistent socket on mount
   useEffect(() => {
@@ -72,6 +95,12 @@ export default function ProctorDashboard() {
     if (selectedRoomId) {
       fetchSelectedRoom(selectedRoomId);
       if (socketRef.current && socketRef.current.connected) {
+        socketRef.current.emit('ROOM_JOIN', {
+          roomId: selectedRoomId,
+          sessionId: selectedRoomId,
+          role: 'reviewer',
+          user: user ? { id: String(user._id || user.id), name: user.fullName || user.name, role: user.role } : null,
+        });
         socketRef.current.emit('join_room', {
           roomId: selectedRoomId,
           sessionId: selectedRoomId,
@@ -152,7 +181,7 @@ export default function ProctorDashboard() {
         }
       }
 
-      // Filter historical alerts strictly belonging to this room (Section 15 & 16)
+      // Filter historical alerts strictly belonging to this room
       if (alertsRes.status === 'fulfilled' && alertsRes.value.data?.success) {
         const fetchedAlerts = alertsRes.value.data.alerts || [];
         const participantSessionIds = new Set(
@@ -175,6 +204,7 @@ export default function ProctorDashboard() {
             riskScore: a.riskScore || 0,
             message: a.evidence || a.description || a.message || `AI detected ${type.replace(/_/g, ' ')}`,
             timestamp: a.timestamp ? new Date(a.timestamp) : new Date(),
+            status: a.status || (a.resolved ? 'RESOLVED' : 'ACTIVE'),
           };
         });
 
@@ -221,6 +251,12 @@ export default function ProctorDashboard() {
 
       const currentRoomId = selectedRoomIdRef.current;
       if (currentRoomId) {
+        socket.emit('ROOM_JOIN', {
+          roomId: currentRoomId,
+          sessionId: currentRoomId,
+          role: 'reviewer',
+          user: user ? { id: String(user._id || user.id), name: user.fullName || user.name, role: user.role } : null,
+        });
         socket.emit('join_room', {
           roomId: currentRoomId,
           sessionId: currentRoomId,
@@ -253,6 +289,12 @@ export default function ProctorDashboard() {
 
       const currentRoomId = selectedRoomIdRef.current;
       if (currentRoomId) {
+        socket.emit('ROOM_JOIN', {
+          roomId: currentRoomId,
+          sessionId: currentRoomId,
+          role: 'reviewer',
+          user: user ? { id: String(user._id || user.id), name: user.fullName || user.name, role: user.role } : null,
+        });
         socket.emit('join_room', {
           roomId: currentRoomId,
           sessionId: currentRoomId,
@@ -281,7 +323,7 @@ export default function ProctorDashboard() {
       }
     });
 
-    // Real-time alerts handler (Section 4, 5, 10, 11, 13, 14)
+    // Real-time alerts handler
     const handleIncomingAlert = (alert) => {
       if (!alert) return;
 
@@ -310,6 +352,7 @@ export default function ProctorDashboard() {
         riskScore: alert.riskScore !== undefined ? alert.riskScore : 0,
         message: alert.message || alert.evidence || alert.description || `AI detected ${alertType.replace(/_/g, ' ')}`,
         timestamp: alert.timestamp ? new Date(alert.timestamp) : new Date(),
+        status: alert.status || (isResolved ? 'RESOLVED' : 'ACTIVE'),
       };
 
       // Add to allAlerts so the overview KPI counters update in real-time
@@ -406,7 +449,18 @@ export default function ProctorDashboard() {
     socket.on('TAB_SWITCH_DETECTED', handleIncomingAlert);
     socket.on('TAB_SWITCH_LIMIT_EXCEEDED', handleIncomingAlert);
 
-    // Live participant joined (Section 2 & 8 & 9)
+    // Room Joined confirmation
+    socket.on('ROOM_JOINED', (data) => {
+      console.log('[ProctorDashboard] Confirmed ROOM_JOINED:', data);
+      if (data?.room) {
+        setSelectedRoom((prev) => ({ ...(prev || {}), ...data.room }));
+      }
+      if (Array.isArray(data?.participants)) {
+        setParticipants(data.participants);
+      }
+    });
+
+    // Live participant joined
     const handleParticipantJoined = (data) => {
       if (!data) return;
       const alertRoom = data.roomId || (data.sessionId && data.sessionId.startsWith('TRV-') ? (data.sessionId.startsWith('TRV-TRV-') ? data.sessionId.split('-').slice(1, 3).join('-') : data.sessionId.split('-').slice(0, 2).join('-')) : null);
@@ -414,9 +468,12 @@ export default function ProctorDashboard() {
       // Update room participant count in overview
       setRooms((prev) => prev.map((r) => {
         if ((r.roomId || r.id)?.toUpperCase() === alertRoom?.toUpperCase()) {
+          const nextCount = data.students !== undefined ? data.students : (data.participantsCount !== undefined ? data.participantsCount : (r.participantsCount || 0) + 1);
           return {
             ...r,
-            participantsCount: data.participantsCount !== undefined ? data.participantsCount : (r.participantsCount || 0) + 1,
+            participantsCount: nextCount,
+            students: nextCount,
+            activeStudents: data.activeStudents !== undefined ? data.activeStudents : r.activeStudents,
             participants: data.participants || r.participants,
           };
         }
@@ -425,16 +482,23 @@ export default function ProctorDashboard() {
 
       const activeRoomId = selectedRoomIdRef.current;
       if (activeRoomId && alertRoom && alertRoom.toUpperCase() === activeRoomId.toUpperCase()) {
+        setSelectedRoom((prev) => prev ? {
+          ...prev,
+          students: data.students !== undefined ? data.students : (data.participantsCount !== undefined ? data.participantsCount : ((prev.students || 0) + 1)),
+          participantsCount: data.participantsCount !== undefined ? data.participantsCount : ((prev.participantsCount || 0) + 1),
+          activeStudents: data.activeStudents !== undefined ? data.activeStudents : prev.activeStudents,
+        } : prev);
+
         if (Array.isArray(data.participants)) {
           setParticipants(data.participants);
-        } else if (data.candidate || data.student || data.user) {
-          const candidate = data.candidate || data.student || data.user;
+        } else if (data.participant || data.candidate || data.student || data.user) {
+          const candidate = data.participant || data.candidate || data.student || data.user;
           const candidateId = candidate.id || data.studentId || data.userId || data.participantId;
           setParticipants((prev) => {
             const exists = prev.some((p) => p.id === candidateId || (data.sessionId && p.sessionId === data.sessionId));
             if (exists) {
               return prev.map((p) => (p.id === candidateId || (data.sessionId && p.sessionId === data.sessionId))
-                ? { ...p, ...candidate, status: 'MONITORING', aiStatus: 'ONLINE' }
+                ? { ...p, ...candidate, connectionState: 'CONNECTED', status: 'MONITORING', aiStatus: 'ONLINE' }
                 : p
               );
             }
@@ -445,10 +509,12 @@ export default function ProctorDashboard() {
                 sessionId: data.sessionId,
                 name: candidate.name || data.studentName || data.userName || 'Candidate',
                 email: candidate.email || data.userEmail || '',
+                connectionState: 'CONNECTED',
                 status: 'MONITORING',
+                monitoringStatus: 'ACTIVE',
                 aiStatus: 'ONLINE',
                 riskScore: 0,
-                riskLevel: 'NORMAL',
+                riskLevel: 'LOW',
                 violations: 0,
                 liveness: 'LIVE',
                 identityStatus: 'VERIFIED',
@@ -459,14 +525,15 @@ export default function ProctorDashboard() {
             ];
           });
         }
-        showNotification(`${data.studentName || data.candidate?.name || 'Candidate'} joined the proctoring room.`);
+        showNotification(`${data.studentName || data.candidate?.name || data.participant?.name || 'Candidate'} joined the proctoring room.`);
       }
     };
 
+    socket.on('ROOM_PARTICIPANT_JOINED', handleParticipantJoined);
     socket.on('participant_joined', handleParticipantJoined);
     socket.on('STUDENT_JOINED', handleParticipantJoined);
 
-    // Participant left (Section 3 & 8 & 9)
+    // Participant left
     const handleParticipantLeft = (data) => {
       if (!data) return;
       const alertRoom = data.roomId || (data.sessionId && data.sessionId.startsWith('TRV-') ? (data.sessionId.startsWith('TRV-TRV-') ? data.sessionId.split('-').slice(1, 3).join('-') : data.sessionId.split('-').slice(0, 2).join('-')) : null);
@@ -474,9 +541,13 @@ export default function ProctorDashboard() {
       // Decrement room participant count in overview
       setRooms((prev) => prev.map((r) => {
         if ((r.roomId || r.id)?.toUpperCase() === alertRoom?.toUpperCase()) {
+          const nextCount = data.students !== undefined ? data.students : Math.max(0, data.participantsCount !== undefined ? data.participantsCount : (r.participantsCount || 1) - 1);
           return {
             ...r,
-            participantsCount: Math.max(0, data.participantsCount !== undefined ? data.participantsCount : (r.participantsCount || 1) - 1),
+            participantsCount: nextCount,
+            students: nextCount,
+            activeStudents: data.activeStudents !== undefined ? data.activeStudents : r.activeStudents,
+            participants: data.participants || r.participants,
           };
         }
         return r;
@@ -484,30 +555,131 @@ export default function ProctorDashboard() {
 
       const activeRoomId = selectedRoomIdRef.current;
       if (activeRoomId && alertRoom && alertRoom.toUpperCase() === activeRoomId.toUpperCase()) {
-        const candidateId = data.candidateId || data.studentId || data.userId || data.id;
+        const candidateId = data.participantId || data.candidateId || data.studentId || data.userId || data.id;
         const sessionId = data.sessionId;
 
-        setParticipants((prev) =>
-          prev.map((p) => {
-            if ((candidateId && p.id === candidateId) || (sessionId && p.sessionId === sessionId)) {
-              return {
-                ...p,
-                status: 'LEFT',
-                aiStatus: 'DISCONNECTED',
-                leftAt: new Date(),
-              };
-            }
-            return p;
-          })
-        );
+        setSelectedRoom((prev) => prev ? {
+          ...prev,
+          students: data.students !== undefined ? data.students : Math.max(0, (prev.students || 1) - 1),
+          participantsCount: data.participantsCount !== undefined ? data.participantsCount : Math.max(0, (prev.participantsCount || 1) - 1),
+          activeStudents: data.activeStudents !== undefined ? data.activeStudents : prev.activeStudents,
+        } : prev);
+
+        if (Array.isArray(data.participants)) {
+          setParticipants(data.participants);
+        } else {
+          setParticipants((prev) =>
+            prev.map((p) => {
+              if ((candidateId && p.id === candidateId) || (sessionId && p.sessionId === sessionId)) {
+                return {
+                  ...p,
+                  status: 'LEFT',
+                  monitoringStatus: 'STOPPED',
+                  connectionState: 'DISCONNECTED',
+                  aiStatus: 'DISCONNECTED',
+                  leftAt: new Date(),
+                };
+              }
+              return p;
+            })
+          );
+        }
 
         showNotification(`${data.studentName || data.name || 'Candidate'} left the room.`);
       }
     };
 
+    socket.on('ROOM_PARTICIPANT_LEFT', handleParticipantLeft);
     socket.on('participant_left', handleParticipantLeft);
     socket.on('STUDENT_LEFT', handleParticipantLeft);
     socket.on('STUDENT_DISCONNECTED', handleParticipantLeft);
+
+    // Participant reconnecting grace state
+    const handleParticipantReconnecting = (data) => {
+      if (!data) return;
+      const alertRoom = data.roomId;
+      const activeRoomId = selectedRoomIdRef.current;
+      if (activeRoomId && alertRoom && alertRoom.toUpperCase() === activeRoomId.toUpperCase()) {
+        const candidateId = data.participantId || data.studentId || data.userId || data.id;
+        setParticipants((prev) =>
+          prev.map((p) => {
+            if ((candidateId && p.id === candidateId) || (data.sessionId && p.sessionId === data.sessionId)) {
+              return {
+                ...p,
+                connectionState: 'RECONNECTING',
+                aiStatus: 'RECONNECTING',
+              };
+            }
+            return p;
+          })
+        );
+        showNotification(`${data.studentName || 'Student'} network interrupted — reconnecting...`);
+      }
+    };
+    socket.on('ROOM_PARTICIPANT_RECONNECTING', handleParticipantReconnecting);
+
+    // Monitoring Started handler
+    const handleMonitoringStarted = (data) => {
+      if (!data) return;
+      const alertRoom = data.roomId;
+      const activeRoomId = selectedRoomIdRef.current;
+      if (activeRoomId && alertRoom && alertRoom.toUpperCase() === activeRoomId.toUpperCase()) {
+        setSelectedRoom((prev) => prev ? {
+          ...prev,
+          activeStudents: data.activeStudents !== undefined ? data.activeStudents : (prev.activeStudents || 0) + 1,
+        } : prev);
+
+        if (Array.isArray(data.participants)) {
+          setParticipants(data.participants);
+        } else {
+          setParticipants((prev) =>
+            prev.map((p) => {
+              if (p.id === data.participantId || p.sessionId === data.sessionId) {
+                return {
+                  ...p,
+                  status: 'MONITORING',
+                  monitoringStatus: 'ACTIVE',
+                  connectionState: 'CONNECTED',
+                };
+              }
+              return p;
+            })
+          );
+        }
+      }
+    };
+    socket.on('MONITORING_STARTED', handleMonitoringStarted);
+
+    // Monitoring Stopped handler
+    const handleMonitoringStopped = (data) => {
+      if (!data) return;
+      const alertRoom = data.roomId;
+      const activeRoomId = selectedRoomIdRef.current;
+      if (activeRoomId && alertRoom && alertRoom.toUpperCase() === activeRoomId.toUpperCase()) {
+        setSelectedRoom((prev) => prev ? {
+          ...prev,
+          activeStudents: data.activeStudents !== undefined ? data.activeStudents : Math.max(0, (prev.activeStudents || 1) - 1),
+        } : prev);
+
+        if (Array.isArray(data.participants)) {
+          setParticipants(data.participants);
+        } else {
+          setParticipants((prev) =>
+            prev.map((p) => {
+              if (p.id === data.participantId || p.sessionId === data.sessionId) {
+                return {
+                  ...p,
+                  status: 'COMPLETED',
+                  monitoringStatus: 'STOPPED',
+                };
+              }
+              return p;
+            })
+          );
+        }
+      }
+    };
+    socket.on('MONITORING_STOPPED', handleMonitoringStopped);
 
     // Participant risk updated
     socket.on('participant_risk_updated', (data) => {
@@ -537,14 +709,16 @@ export default function ProctorDashboard() {
     });
 
     // Room participants list sync
-    socket.on('room_participants_updated', (data) => {
-      const alertRoom = data.roomId;
+    const handleRoomParticipantsUpdated = (data) => {
+      const alertRoom = data?.roomId;
       if (alertRoom) {
         setRooms((prev) => prev.map((r) => {
           if ((r.roomId || r.id)?.toUpperCase() === alertRoom.toUpperCase()) {
             return {
               ...r,
-              participantsCount: data.participantsCount !== undefined ? data.participantsCount : (r.participantsCount || 0),
+              participantsCount: data.participantsCount !== undefined ? data.participantsCount : (data.students !== undefined ? data.students : r.participantsCount),
+              students: data.students !== undefined ? data.students : r.students,
+              activeStudents: data.activeStudents !== undefined ? data.activeStudents : r.activeStudents,
               participants: data.participants || r.participants,
             };
           }
@@ -554,11 +728,21 @@ export default function ProctorDashboard() {
 
       const activeRoomId = selectedRoomIdRef.current;
       if (activeRoomId && alertRoom && alertRoom.toUpperCase() === activeRoomId.toUpperCase()) {
+        setSelectedRoom((prev) => prev ? {
+          ...prev,
+          students: data.students !== undefined ? data.students : prev.students,
+          activeStudents: data.activeStudents !== undefined ? data.activeStudents : prev.activeStudents,
+          participantsCount: data.participantsCount !== undefined ? data.participantsCount : prev.participantsCount,
+        } : prev);
+
         if (Array.isArray(data.participants)) {
           setParticipants(data.participants);
         }
       }
-    });
+    };
+
+    socket.on('ROOM_PARTICIPANTS_UPDATED', handleRoomParticipantsUpdated);
+    socket.on('room_participants_updated', handleRoomParticipantsUpdated);
 
     // Room ended
     socket.on('ROOM_ENDED', (data) => {
@@ -578,24 +762,53 @@ export default function ProctorDashboard() {
     });
   };
 
-  const handleEndRoom = async () => {
-    if (!selectedRoomId) return;
-    if (!window.confirm(`Are you sure you want to conclude examination "${selectedRoom?.title || selectedRoomId}"? All active student sessions will be marked completed.`)) {
-      return;
-    }
-
-    setEndingRoom(true);
+  // Fullscreen API toggle handler
+  const handleToggleFullscreen = async () => {
     try {
-      const res = await api.post(`/rooms/${selectedRoomId}/end`);
-      if (res.data?.success) {
-        showNotification(`Room ${selectedRoomId} ended. Candidate reports generated.`);
-        fetchSelectedRoom(selectedRoomId);
-        fetchOverviewData();
+      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        if (document.documentElement.requestFullscreen) {
+          await document.documentElement.requestFullscreen();
+        } else if (document.documentElement.webkitRequestFullscreen) {
+          await document.documentElement.webkitRequestFullscreen();
+        }
+      } else {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          await document.webkitExitFullscreen();
+        }
       }
     } catch (err) {
-      showNotification(err.response?.data?.message || 'Failed to end examination');
-    } finally {
-      setEndingRoom(false);
+      console.warn('[ProctorDashboard] Fullscreen toggle error:', err);
+      toast.error('Unable to toggle fullscreen mode in this browser context.');
+    }
+  };
+
+  // Safe clipboard helper with secure fallback
+  const copyTextToClipboard = async (text) => {
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (e) {
+        console.warn('navigator.clipboard.writeText failed, using fallback', e);
+      }
+    }
+    try {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      const successful = document.execCommand('copy');
+      textArea.remove();
+      return successful;
+    } catch (err) {
+      console.error('execCommand copy failed', err);
+      return false;
     }
   };
 
@@ -606,20 +819,79 @@ export default function ProctorDashboard() {
     return `${origin}/join/${roomId}${token ? `?token=${token}` : ''}`;
   };
 
-  const handleCopyLink = async (room) => {
-    const roomId = room?.roomId || room?.id;
-    const url = getFullJoinUrl(room);
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopiedId(roomId);
-      showNotification('Candidate join link copied to clipboard');
-      setTimeout(() => setCopiedId(null), 2500);
-    } catch (_) {
-      showNotification('Failed to copy join link');
+  // Top header & banner "Copy Student Link" handler
+  const handleCopyTopStudentLink = async () => {
+    if (!selectedRoom) return;
+    const url = getFullJoinUrl(selectedRoom);
+    const success = await copyTextToClipboard(url);
+    if (success) {
+      setCopiedTopLink(true);
+      toast.success('Student join link copied to clipboard.');
+      setTimeout(() => setCopiedTopLink(false), 2500);
+    } else {
+      toast.error('Failed to copy student join link. Please copy manually.');
     }
   };
 
-  // Section 4: REAL KPI Computations (No fake or hardcoded values)
+  // Student Monitoring empty-state "Copy Student Join Link" handler
+  const handleCopyMonitoringJoinLink = async () => {
+    if (!selectedRoom) return;
+    const url = getFullJoinUrl(selectedRoom);
+    const success = await copyTextToClipboard(url);
+    if (success) {
+      setCopiedMonitoringLink(true);
+      toast.success('Student join link copied to clipboard.');
+      setTimeout(() => setCopiedMonitoringLink(false), 2500);
+    } else {
+      toast.error('Failed to copy student join link. Please copy manually.');
+    }
+  };
+
+  // Room card copy link handler
+  const handleCopyLink = async (room) => {
+    const roomId = room?.roomId || room?.id;
+    const url = getFullJoinUrl(room);
+    const success = await copyTextToClipboard(url);
+    if (success) {
+      setCopiedId(roomId);
+      toast.success('Student join link copied to clipboard.');
+      setTimeout(() => setCopiedId(null), 2500);
+    } else {
+      toast.error('Failed to copy student join link. Please copy manually.');
+    }
+  };
+
+  // Confirmed End Exam action with backend API
+  const confirmEndExam = async () => {
+    if (!selectedRoomId) return;
+    setEndingRoom(true);
+    try {
+      const res = await api.post(`/rooms/${selectedRoomId}/end`);
+      if (res.data?.success) {
+        toast.success('Examination session ended successfully. Reports generated.');
+        setSelectedRoom((prev) => (prev ? { ...prev, status: 'ENDED' } : prev));
+        setRooms((prev) =>
+          prev.map((r) =>
+            (r.roomId || r.id)?.toUpperCase() === selectedRoomId.toUpperCase()
+              ? { ...r, status: 'ENDED' }
+              : r
+          )
+        );
+        setShowEndExamModal(false);
+        fetchSelectedRoom(selectedRoomId);
+        fetchOverviewData();
+      } else {
+        toast.error(res.data?.message || 'Failed to end examination session.');
+      }
+    } catch (err) {
+      console.error('[ProctorDashboard] End exam error:', err);
+      toast.error(err.response?.data?.message || 'Failed to end examination session.');
+    } finally {
+      setEndingRoom(false);
+    }
+  };
+
+  // Real KPI Computations (Data-driven from backend state)
   const totalRoomsCount = rooms.length;
   const activeRoomsCount = rooms.filter((r) => r.status !== 'ENDED').length;
   const studentsMonitoredCount = useMemo(() => {
@@ -651,7 +923,7 @@ export default function ProctorDashboard() {
     }, 0);
   }, [allAlerts, rooms]);
 
-  // Section 5: Filtered Rooms for Selection
+  // Filtered Rooms for Selection
   const filteredRooms = useMemo(() => {
     return rooms.filter((r) => {
       const rId = r.roomId || r.id || '';
@@ -669,18 +941,61 @@ export default function ProctorDashboard() {
     });
   }, [rooms, searchTerm, filterStatus]);
 
-  // Section 6: Specific Active Room Summary
-  const roomStatus = selectedRoom?.status === 'ENDED' ? 'ENDED' : 'LIVE';
-  const totalRoomStudents = participants.length;
-  const activeRoomStudents = participants.filter((p) => p.status === 'MONITORING' || p.status === 'VERIFYING').length;
-  const totalRoomAlerts = liveAlerts.length;
-  const criticalRoomAlerts = liveAlerts.filter((a) =>
+  // Specific Active Room Summary (Authoritative MongoDB Room counters + live participants state)
+  const totalRoomStudents = selectedRoom?.students !== undefined ? selectedRoom.students : (selectedRoom?.participantsCount !== undefined ? selectedRoom.participantsCount : participants.filter(p => p.status !== 'LEFT').length);
+  const activeRoomStudents = selectedRoom?.activeStudents !== undefined ? selectedRoom.activeStudents : participants.filter((p) => p.status === 'MONITORING' || p.status === 'ACTIVE' || p.monitoringStatus === 'ACTIVE').length;
+  const totalRoomAlerts = selectedRoom?.alerts !== undefined && selectedRoom.alerts > liveAlerts.length ? selectedRoom.alerts : liveAlerts.length;
+  const criticalRoomAlerts = selectedRoom?.criticalAlerts !== undefined && selectedRoom.criticalAlerts > 0 ? selectedRoom.criticalAlerts : liveAlerts.filter((a) =>
     ['CRITICAL', 'HIGH', 'DANGER'].includes(String(a.severity).toUpperCase())
   ).length;
 
+  // Computed Room Status: 'Live' | 'Waiting' | 'Ended'
+  const computedRoomState = useMemo(() => {
+    if (selectedRoom?.status === 'ENDED') {
+      return {
+        label: 'Ended',
+        badgeClass: 'bg-slate-100 text-slate-700 border-slate-300',
+        dotClass: 'bg-slate-500',
+        tooltip: 'This examination session has ended and reports are archived.'
+      };
+    }
+    if (participants.length === 0) {
+      return {
+        label: 'Waiting',
+        badgeClass: 'bg-blue-50 text-blue-700 border-blue-200',
+        dotClass: 'bg-blue-500 animate-pulse',
+        tooltip: 'Room is active and waiting for students to join.'
+      };
+    }
+    return {
+      label: 'Live',
+      badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      dotClass: 'bg-emerald-500 animate-pulse',
+      tooltip: 'Examination is live with active student participants.'
+    };
+  }, [selectedRoom?.status, participants.length]);
+
+  // Computed Real-time Connection State: 'REAL-TIME CONNECTED' | 'CONNECTION LOST'
+  const computedConnectionState = useMemo(() => {
+    if (isConnected) {
+      return {
+        label: 'REAL-TIME CONNECTED',
+        badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        dotClass: 'bg-emerald-500 animate-pulse',
+        tooltip: 'Real-time WebSocket telemetry stream is actively connected.'
+      };
+    }
+    return {
+      label: 'CONNECTION LOST',
+      badgeClass: 'bg-rose-50 text-rose-700 border-rose-200',
+      dotClass: 'bg-rose-500 animate-ping',
+      tooltip: 'Real-time telemetry connection interrupted. Reconnecting...'
+    };
+  }, [isConnected]);
+
   return (
     <div className="space-y-6 select-none font-sans pb-12">
-      {/* Toast Notification */}
+      {/* Toast Notification (Legacy Fallback) */}
       {toastMsg && (
         <div className="fixed top-20 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl border border-slate-700 text-xs font-semibold shadow-2xl flex items-center gap-3 animate-fade-in">
           <Shield size={16} className="text-emerald-400" />
@@ -688,7 +1003,7 @@ export default function ProctorDashboard() {
         </div>
       )}
 
-      {/* Page Header (Section 4) */}
+      {/* Page Header with Action Buttons */}
       <PageHeader
         title="PROCTOR DASHBOARD"
         subtitle="Monitor your virtual rooms, students, alerts and examination reports."
@@ -699,51 +1014,96 @@ export default function ProctorDashboard() {
         ]}
         actions={
           selectedRoomId ? (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* A. All Rooms (Navigation / Back button) */}
               <button
-                onClick={() => setSearchParams({})}
-                className="py-2 px-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs flex items-center gap-2 shadow-xs transition cursor-pointer"
+                type="button"
+                onClick={() => navigate('/rooms')}
+                className="py-2 px-3.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 font-bold text-xs flex items-center gap-2 shadow-xs transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-1"
+                title="Back to all virtual rooms"
+                aria-label="Back to all virtual rooms"
               >
-                <ArrowLeft size={14} />
+                <ArrowLeft size={14} className="text-slate-600" />
                 <span>All Rooms</span>
               </button>
 
+              {/* Copy Student Link (Primary Top Header Action) */}
               <button
-                onClick={() => navigate(`/proctor-room-host/${selectedRoomId}`)}
-                className="py-2 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-2 shadow-xs transition cursor-pointer"
-                title="Open Fullscreen Proctor Monitoring View"
+                type="button"
+                onClick={handleCopyTopStudentLink}
+                className="py-2 px-3.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-800 font-bold text-xs flex items-center gap-2 shadow-xs transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-1"
+                title="Copy the student join link to clipboard"
+                aria-label="Copy student invitation link"
               >
-                <ExternalLink size={14} className="text-emerald-400" />
-                <span>Fullscreen Host View</span>
+                {copiedTopLink ? (
+                  <>
+                    <Check size={14} className="text-emerald-600" />
+                    <span className="text-emerald-700">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy size={14} className="text-slate-600" />
+                    <span>Copy Student Link</span>
+                  </>
+                )}
               </button>
 
+              {/* B. Fullscreen Host View (Browser Fullscreen API Toggle) */}
+              <button
+                type="button"
+                onClick={handleToggleFullscreen}
+                className="py-2 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white font-bold text-xs flex items-center gap-2 shadow-xs transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-1"
+                title={isFullscreen ? "Exit fullscreen monitoring view" : "Open fullscreen monitoring view"}
+                aria-label={isFullscreen ? "Exit fullscreen monitoring view" : "Open fullscreen monitoring view"}
+              >
+                {isFullscreen ? (
+                  <>
+                    <Minimize2 size={14} className="text-emerald-400" />
+                    <span>Exit Fullscreen</span>
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 size={14} className="text-emerald-400" />
+                    <span>Fullscreen Host View</span>
+                  </>
+                )}
+              </button>
+
+              {/* C. End Exam (Confirmation Modal Trigger) */}
               {selectedRoom?.status !== 'ENDED' && (
                 <button
-                  onClick={handleEndRoom}
+                  type="button"
+                  onClick={() => setShowEndExamModal(true)}
                   disabled={endingRoom}
-                  className="py-2 px-3.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer disabled:opacity-50"
-                  title="Conclude Examination and Finalize Student Reports"
+                  className="py-2 px-3.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-600 focus-visible:ring-offset-1"
+                  title="Conclude examination session"
+                  aria-label="End exam"
                 >
                   <StopCircle size={14} />
-                  <span>{endingRoom ? 'Concluding...' : 'End Exam'}</span>
+                  <span>End Exam</span>
                 </button>
               )}
             </div>
           ) : (
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={fetchOverviewData}
                 disabled={loading}
-                className="py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer"
+                className="py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
                 title="Refresh Proctor Data"
+                aria-label="Refresh proctor data"
               >
                 <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
                 <span>Refresh</span>
               </button>
 
               <button
+                type="button"
                 onClick={() => navigate('/rooms')}
-                className="py-2 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-2 shadow-xs transition cursor-pointer"
+                className="py-2 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-2 shadow-xs transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
+                title="View All Virtual Rooms"
+                aria-label="View virtual rooms"
               >
                 <Video size={14} />
                 <span>Virtual Rooms</span>
@@ -753,10 +1113,10 @@ export default function ProctorDashboard() {
         }
       />
 
-      {/* Top Summary Cards (Section 4: Real Backend Data) */}
+      {/* Top Summary Cards (Pure Data-Driven Backend Metrics) */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
         {/* TOTAL ROOMS */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs">
           <div className="flex items-center justify-between">
             <span className="text-[10.5px] font-mono font-bold uppercase tracking-wider text-slate-500">
               Total Rooms
@@ -774,7 +1134,7 @@ export default function ProctorDashboard() {
         </div>
 
         {/* ACTIVE ROOMS */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs">
           <div className="flex items-center justify-between">
             <span className="text-[10.5px] font-mono font-bold uppercase tracking-wider text-emerald-600">
               Active Rooms
@@ -792,7 +1152,7 @@ export default function ProctorDashboard() {
         </div>
 
         {/* STUDENTS MONITORED */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs">
           <div className="flex items-center justify-between">
             <span className="text-[10.5px] font-mono font-bold uppercase tracking-wider text-blue-600">
               Students Monitored
@@ -810,7 +1170,7 @@ export default function ProctorDashboard() {
         </div>
 
         {/* TOTAL ALERTS */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs">
           <div className="flex items-center justify-between">
             <span className="text-[10.5px] font-mono font-bold uppercase tracking-wider text-amber-600">
               Total Alerts
@@ -828,7 +1188,7 @@ export default function ProctorDashboard() {
         </div>
 
         {/* CRITICAL ALERTS */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs col-span-2 sm:col-span-1">
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs col-span-2 sm:col-span-1">
           <div className="flex items-center justify-between">
             <span className="text-[10.5px] font-mono font-bold uppercase tracking-wider text-rose-600">
               Critical Alerts
@@ -847,7 +1207,7 @@ export default function ProctorDashboard() {
       </div>
 
       {/* =========================================================================
-          VIEW A: ROOM SELECTION (Section 5)
+          VIEW A: ROOM SELECTION (When no roomId query param)
           ========================================================================= */}
       {!selectedRoomId && (
         <div className="space-y-4">
@@ -866,6 +1226,7 @@ export default function ProctorDashboard() {
 
             <div className="flex items-center gap-1.5">
               <button
+                type="button"
                 onClick={() => setFilterStatus('ALL')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
                   filterStatus === 'ALL'
@@ -876,6 +1237,7 @@ export default function ProctorDashboard() {
                 All ({rooms.length})
               </button>
               <button
+                type="button"
                 onClick={() => setFilterStatus('ACTIVE')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
                   filterStatus === 'ACTIVE'
@@ -886,6 +1248,7 @@ export default function ProctorDashboard() {
                 Active ({activeRoomsCount})
               </button>
               <button
+                type="button"
                 onClick={() => setFilterStatus('ENDED')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
                   filterStatus === 'ENDED'
@@ -898,7 +1261,7 @@ export default function ProctorDashboard() {
             </div>
           </div>
 
-          {/* Section 5: Room Selection List/Cards */}
+          {/* Room Cards Grid */}
           {loading ? (
             <div className="py-20 text-center space-y-3">
               <div className="w-8 h-8 border-2 border-slate-900 border-t-transparent rounded-full animate-spin mx-auto" />
@@ -916,6 +1279,7 @@ export default function ProctorDashboard() {
                 </p>
               </div>
               <button
+                type="button"
                 onClick={() => navigate('/rooms')}
                 className="py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition inline-flex items-center gap-2 cursor-pointer shadow-sm"
               >
@@ -1000,9 +1364,10 @@ export default function ProctorDashboard() {
                       </div>
                     </div>
 
-                    {/* Action: Open Room Dashboard (Section 5) */}
+                    {/* Action: Open Room Dashboard */}
                     <div className="pt-2">
                       <button
+                        type="button"
                         onClick={() => setSearchParams({ roomId: rId })}
                         className="w-full py-2.5 px-3 rounded-xl bg-[#10B981] hover:bg-[#059669] active:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition cursor-pointer"
                       >
@@ -1019,7 +1384,7 @@ export default function ProctorDashboard() {
       )}
 
       {/* =========================================================================
-          VIEW B: ROOM MONITORING DASHBOARD (Section 6, 7, 8, 9, 10, 11)
+          VIEW B: ROOM MONITORING DASHBOARD (When roomId query param is present)
           ========================================================================= */}
       {selectedRoomId && (
         roomForbidden && !roomLoading ? (
@@ -1035,7 +1400,8 @@ export default function ProctorDashboard() {
             </div>
             <div className="flex items-center justify-center gap-3 pt-2">
               <button
-                onClick={() => setSearchParams({})}
+                type="button"
+                onClick={() => navigate('/rooms')}
                 className="py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-xs"
               >
                 <ArrowLeft size={14} />
@@ -1056,13 +1422,15 @@ export default function ProctorDashboard() {
             </div>
             <div className="flex items-center justify-center gap-3 pt-2">
               <button
-                onClick={() => setSearchParams({})}
+                type="button"
+                onClick={() => navigate('/rooms')}
                 className="py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-xs"
               >
                 <ArrowLeft size={14} />
                 <span>Return to All Rooms</span>
               </button>
               <button
+                type="button"
                 onClick={() => fetchSelectedRoom(selectedRoomId)}
                 className="py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition flex items-center gap-2 cursor-pointer border border-slate-200"
               >
@@ -1072,489 +1440,637 @@ export default function ProctorDashboard() {
             </div>
           </div>
         ) : (
-        <div className="space-y-6">
-          {/* Section 6: Specific Room Monitoring Dashboard Summary */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-              <div>
-                <div className="flex items-center gap-2 mb-2 flex-wrap">
-                  <span className="text-xs font-mono font-bold text-slate-900 px-2.5 py-0.5 rounded bg-slate-100 border border-slate-200">
-                    Room ID: {selectedRoomId}
-                  </span>
-                  <span
-                    className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 ${
-                      roomStatus === 'LIVE'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : 'bg-slate-100 text-slate-600 border-slate-200'
-                    }`}
-                  >
-                    {roomStatus === 'LIVE' && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />}
-                    Status: {roomStatus}
-                  </span>
-                  {/* Real-time Socket Connection Badge (Section 12) */}
-                  <span
-                    className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 ${
-                      isConnected
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : 'bg-rose-50 text-rose-700 border-rose-200'
-                    }`}
-                  >
-                    <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500 animate-ping'}`} />
-                    {isConnected ? 'REAL-TIME CONNECTED' : 'REAL-TIME CONNECTION LOST'}
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2 flex-wrap text-xs text-slate-500 mb-1">
-                  <span className="font-semibold text-slate-700">
-                    Host: {selectedRoom?.hostName || selectedRoom?.host?.name || 'Session Host'}
-                  </span>
-                  <span className="text-slate-300">•</span>
-                  <span className="font-semibold text-slate-700">
-                    Mode: {selectedRoom?.mode || selectedRoom?.sessionType || 'EXAM'}
-                  </span>
-                  <span className="text-slate-300">•</span>
-                  <span className="font-semibold text-slate-700">
-                    Duration: {selectedRoom?.durationMinutes || 60} mins
-                  </span>
-                  {selectedRoom?.createdAt && (
-                    <>
-                      <span className="text-slate-300">•</span>
-                      <span className="text-slate-500 font-mono text-[11px]">
-                        Created: {new Date(selectedRoom.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </>
-                  )}
-                </div>
-
-                <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">
-                  Room: {selectedRoom?.title && selectedRoom.title !== 'null' ? selectedRoom.title : `Monitored Examination ${selectedRoomId}`}
-                </h2>
-              </div>
-
-              {/* Quick Candidate Share Link Button */}
-              {selectedRoom && (
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleCopyLink(selectedRoom)}
-                    className="py-2 px-3 rounded-xl bg-white hover:bg-[#F1F5F9] text-[#0F172A] text-xs font-bold flex items-center gap-1.5 transition cursor-pointer border border-[#CBD5E1] shadow-xs"
-                    title="Copy Student Join Link"
-                  >
-                    {copiedId === selectedRoomId ? (
-                      <Check size={13} className="text-emerald-600 font-bold" />
-                    ) : (
-                      <Copy size={13} className="text-[#0F172A]" />
-                    )}
-                    <span>{copiedId === selectedRoomId ? 'Copied' : 'Copy Student Link'}</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Room-level Statistics (Section 6) */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                <span className="text-[10px] font-mono text-slate-500 uppercase block font-semibold">
-                  Students
-                </span>
-                <span className="text-2xl font-extrabold text-slate-900 mt-0.5 block">
-                  {totalRoomStudents}
-                </span>
-                <span className="text-[10px] text-slate-400 font-medium">Joined room</span>
-              </div>
-
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                <span className="text-[10px] font-mono text-emerald-600 uppercase block font-semibold">
-                  Active
-                </span>
-                <span className="text-2xl font-extrabold text-emerald-600 mt-0.5 block">
-                  {activeRoomStudents}
-                </span>
-                <span className="text-[10px] text-slate-400 font-medium">Currently monitoring</span>
-              </div>
-
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                <span className="text-[10px] font-mono text-amber-600 uppercase block font-semibold">
-                  Alerts
-                </span>
-                <span className="text-2xl font-extrabold text-slate-900 mt-0.5 block">
-                  {totalRoomAlerts}
-                </span>
-                <span className="text-[10px] text-slate-400 font-medium">Total AI alerts</span>
-              </div>
-
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                <span className="text-[10px] font-mono text-rose-600 uppercase block font-semibold">
-                  Critical
-                </span>
-                <span className="text-2xl font-extrabold text-rose-600 mt-0.5 block">
-                  {criticalRoomAlerts}
-                </span>
-                <span className="text-[10px] text-slate-400 font-medium">Severe violations</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Monitoring Layout: Student Monitoring (Left 65%) + Live Alerts (Right 35%) */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Section 7: STUDENT MONITORING (8 cols) */}
-            <div className="lg:col-span-8 bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center">
-                    <Users size={16} />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900">STUDENT MONITORING</h3>
-                    <p className="text-[11px] text-slate-500">Live candidate verification & integrity state</p>
-                  </div>
-                </div>
-                <span className="text-xs font-mono font-bold text-slate-700 bg-slate-100 px-2.5 py-1 rounded-lg">
-                  {participants.length} {participants.length === 1 ? 'Student' : 'Students'}
-                </span>
-              </div>
-
-              {roomLoading ? (
-                <div className="py-16 text-center space-y-2">
-                  <div className="w-7 h-7 border-2 border-slate-900 border-t-transparent rounded-full animate-spin mx-auto" />
-                  <p className="text-xs text-slate-500">Loading student participants...</p>
-                </div>
-              ) : participants.length === 0 ? (
-                <div className="p-8 text-center space-y-3 bg-slate-50 rounded-xl border border-slate-200">
-                  <Users size={28} className="text-slate-400 mx-auto" />
-                  <div>
-                    <h4 className="text-sm font-bold text-slate-800">Waiting for Students to Join</h4>
-                    <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
-                      Share the student invitation link. Joined candidates will appear here automatically with real-time AI metrics.
-                    </p>
-                  </div>
-                  {selectedRoom && (
-                    <button
-                      onClick={() => handleCopyLink(selectedRoom)}
-                      className="py-2 px-3.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition inline-flex items-center gap-2 cursor-pointer shadow-xs"
+          <div className="space-y-6">
+            {/* Specific Room Monitoring Dashboard Summary Banner */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    <span className="text-xs font-mono font-bold text-slate-900 px-2.5 py-0.5 rounded bg-slate-100 border border-slate-200">
+                      Room ID: {selectedRoomId}
+                    </span>
+                    
+                    {/* Status: Live | Waiting | Ended */}
+                    <span
+                      className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 ${computedRoomState.badgeClass}`}
+                      title={computedRoomState.tooltip}
                     >
-                      <Copy size={13} />
-                      <span>Copy Student Join Link</span>
+                      <span className={`w-2 h-2 rounded-full ${computedRoomState.dotClass}`} />
+                      Status: {computedRoomState.label}
+                    </span>
+
+                    {/* Real-time Socket Connection Badge: REAL-TIME CONNECTED | CONNECTION LOST */}
+                    <span
+                      className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 ${computedConnectionState.badgeClass}`}
+                      title={computedConnectionState.tooltip}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${computedConnectionState.dotClass}`} />
+                      {computedConnectionState.label}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap text-xs text-slate-500 mb-1">
+                    <span className="font-semibold text-slate-700">
+                      Host: {selectedRoom?.hostName || selectedRoom?.host?.name || 'Session Host'}
+                    </span>
+                    <span className="text-slate-300">•</span>
+                    <span className="font-semibold text-slate-700">
+                      Mode: {selectedRoom?.mode || selectedRoom?.sessionType || 'EXAM'}
+                    </span>
+                    <span className="text-slate-300">•</span>
+                    <span className="font-semibold text-slate-700">
+                      Duration: {selectedRoom?.durationMinutes || 60} mins
+                    </span>
+                    {selectedRoom?.createdAt && (
+                      <>
+                        <span className="text-slate-300">•</span>
+                        <span className="text-slate-500 font-mono text-[11px]">
+                          Created: {new Date(selectedRoom.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </>
+                    )}
+                  </div>
+
+                  <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">
+                    Room: {selectedRoom?.title && selectedRoom.title !== 'null' ? selectedRoom.title : `Monitored Examination ${selectedRoomId}`}
+                  </h2>
+                </div>
+
+                {/* Quick Candidate Share Link Button */}
+                {selectedRoom && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyTopStudentLink}
+                      className="py-2 px-3.5 rounded-xl bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-800 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer border border-slate-300 shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
+                      title="Copy Student Link"
+                      aria-label="Copy student link"
+                    >
+                      {copiedTopLink ? (
+                        <>
+                          <Check size={14} className="text-emerald-600 font-bold" />
+                          <span className="text-emerald-700">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={13} className="text-slate-700" />
+                          <span>Copy Student Link</span>
+                        </>
+                      )}
                     </button>
-                  )}
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-200/80 text-[10.5px] font-mono uppercase text-slate-400 tracking-wider">
-                        <th className="py-2.5 px-3">Student Name</th>
-                        <th className="py-2.5 px-2">Status</th>
-                        <th className="py-2.5 px-2">Liveness</th>
-                        <th className="py-2.5 px-2">Identity</th>
-                        <th className="py-2.5 px-2">Attention</th>
-                        <th className="py-2.5 px-2">Risk</th>
-                        <th className="py-2.5 px-2">Alerts</th>
-                        <th className="py-2.5 px-2">Tab Switches</th>
-                        <th className="py-2.5 px-3 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-xs">
-                      {participants.map((p, idx) => {
-                        const isTerminated = p.status === 'TERMINATED' || (p.tabSwitchCount || 0) >= 4;
-                        const riskScore = isTerminated ? 100 : (p.riskScore || 0);
-                        const rawRisk = isTerminated ? 'CRITICAL' : (p.riskLevel || (riskScore > 60 ? 'HIGH' : riskScore > 20 ? 'MEDIUM' : 'LOW'));
-                        const riskLevel = rawRisk === 'NORMAL' ? 'LOW' : rawRisk;
-                        const isVerifiedIdentity = p.identityStatus === 'VERIFIED';
-                        const isLive = p.liveness === 'LIVE' || p.liveness === 'VERIFIED' || p.liveness === 'REAL';
-                        const attentionValue = p.attentionScore !== undefined
-                          ? p.attentionScore
-                          : (p.gaze === 'center' ? (riskScore > 20 ? 71 : 92) : 65);
-
-                        return (
-                          <tr key={p.id || p.sessionId || idx} className="hover:bg-slate-50/80 transition-colors">
-                            {/* Student Name & AI Status */}
-                            <td className="py-3 px-3">
-                              <div className="flex items-center gap-2">
-                                <span
-                                  className={`w-2 h-2 rounded-full shrink-0 ${
-                                    isTerminated
-                                      ? 'bg-rose-500'
-                                      : p.status === 'LEFT' || p.aiStatus === 'OFFLINE' || p.aiStatus === 'DISCONNECTED'
-                                      ? 'bg-slate-400'
-                                      : p.aiStatus === 'PROCESSING'
-                                      ? 'bg-blue-500 animate-pulse'
-                                      : 'bg-emerald-500 animate-pulse'
-                                  }`}
-                                  title={`AI Pipeline: ${isTerminated ? 'TERMINATED' : p.status === 'LEFT' ? 'DISCONNECTED' : (p.aiStatus || 'ONLINE')}`}
-                                />
-                                <div className="font-bold text-slate-900 leading-tight">
-                                  {p.name || 'Candidate'}
-                                </div>
-                              </div>
-                              <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1.5 mt-0.5">
-                                <span className="truncate max-w-[140px]">{p.email || p.sessionId || 'Candidate'}</span>
-                                <span className={`text-[9px] uppercase font-bold px-1 rounded ${
-                                  isTerminated
-                                    ? 'bg-rose-50 text-rose-700 font-extrabold'
-                                    : p.status === 'LEFT' || p.aiStatus === 'OFFLINE' || p.aiStatus === 'DISCONNECTED'
-                                    ? 'bg-slate-100 text-slate-500'
-                                    : 'bg-emerald-50 text-emerald-700'
-                                }`}>
-                                  AI: {isTerminated ? 'TERMINATED' : p.status === 'LEFT' ? 'DISCONNECTED' : (p.aiStatus || 'ONLINE')}
-                                </span>
-                              </div>
-                            </td>
-
-                            {/* Status */}
-                            <td className="py-3 px-2">
-                              <div>
-                                <span
-                                  className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
-                                    isTerminated
-                                      ? 'bg-rose-100 text-rose-800 border border-rose-300 font-extrabold'
-                                      : p.status === 'MONITORING'
-                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                      : p.status === 'SUSPENDED'
-                                      ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                      : p.status === 'LEFT'
-                                      ? 'bg-slate-100 text-slate-500'
-                                      : 'bg-blue-50 text-blue-700 border border-blue-200'
-                                  }`}
-                                >
-                                  {isTerminated ? 'TERMINATED' : (p.status || 'MONITORING')}
-                                </span>
-                                {isTerminated && (
-                                  <div className="text-[9px] text-rose-600 font-bold uppercase mt-0.5 leading-tight">
-                                    {p.terminationReason || 'TAB SWITCH LIMIT EXCEEDED'}
-                                  </div>
-                                )}
-                              </div>
-                            </td>
-
-                            {/* Liveness */}
-                            <td className="py-3 px-2">
-                              <span
-                                className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
-                                  isLive
-                                    ? 'bg-emerald-50 text-emerald-700'
-                                    : 'bg-rose-50 text-rose-700'
-                                }`}
-                              >
-                                {isLive ? 'LIVE' : 'SPOOF'}
-                              </span>
-                            </td>
-
-                            {/* Identity */}
-                            <td className="py-3 px-2">
-                              <span
-                                className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
-                                  isVerifiedIdentity
-                                    ? 'bg-emerald-50 text-emerald-700'
-                                    : 'bg-amber-50 text-amber-700'
-                                }`}
-                              >
-                                {isVerifiedIdentity ? 'VERIFIED' : 'MISMATCH'}
-                              </span>
-                            </td>
-
-                            {/* Attention */}
-                            <td className="py-3 px-2">
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-extrabold text-slate-800 font-mono text-[11px]">
-                                  {attentionValue}%
-                                </span>
-                              </div>
-                            </td>
-
-                            {/* Risk */}
-                            <td className="py-3 px-2">
-                              <span
-                                className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
-                                  riskLevel === 'CRITICAL'
-                                    ? 'bg-rose-600 text-white font-black'
-                                    : riskLevel === 'HIGH'
-                                    ? 'bg-rose-100 text-rose-800 font-extrabold'
-                                    : riskLevel === 'MEDIUM'
-                                    ? 'bg-amber-100 text-amber-800'
-                                    : 'bg-emerald-50 text-emerald-700'
-                                }`}
-                              >
-                                {riskLevel}
-                              </span>
-                            </td>
-
-                            {/* Alerts */}
-                            <td className="py-3 px-2 font-mono text-slate-700 font-semibold text-[11px]">
-                              {p.violations || 0} alerts
-                            </td>
-
-                            {/* Tab Switches */}
-                            <td className="py-3 px-2">
-                              <span className={`font-mono text-xs font-extrabold ${
-                                isTerminated || (p.tabSwitchCount || 0) >= 4
-                                  ? 'text-rose-600 font-black'
-                                  : (p.tabSwitchCount || 0) === 3
-                                  ? 'text-rose-600'
-                                  : (p.tabSwitchCount || 0) > 0
-                                  ? 'text-amber-600'
-                                  : 'text-slate-700'
-                              }`}>
-                                {isTerminated ? Math.max(p.tabSwitchCount || 4, 4) : (p.tabSwitchCount || 0)} / 3
-                              </span>
-                            </td>
-
-                            {/* Actions (Section 9) */}
-                            <td className="py-3 px-3 text-right">
-                              <div className="inline-flex items-center gap-1.5">
-                                <button
-                                  onClick={() => {
-                                    setSelectedParticipant(p);
-                                    setIsParticipantModalOpen(true);
-                                  }}
-                                  className="py-1 px-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-[10.5px] transition cursor-pointer"
-                                  title="Inspect Live Student Details & Perceptions"
-                                >
-                                  View Student
-                                </button>
-
-                                <button
-                                  onClick={() => {
-                                    setSelectedSessionId(p.sessionId);
-                                    setIsReportModalOpen(true);
-                                  }}
-                                  className="py-1 px-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold text-[10.5px] transition cursor-pointer flex items-center gap-1"
-                                  title="Open Candidate Proctoring Integrity Report"
-                                >
-                                  <FileText size={11} />
-                                  <span>View Report</span>
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            {/* Section 8: LIVE ALERTS (4 cols) */}
-            <div className="lg:col-span-4 bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
-                    <Radio size={16} className="animate-pulse" />
                   </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900">LIVE ALERTS</h3>
-                    <p className="text-[11px] text-slate-500">Real-time AI violation stream</p>
-                  </div>
-                </div>
-                <span className="text-xs font-mono font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full">
-                  {liveAlerts.length}
-                </span>
-              </div>
-
-              {/* Real-time alert list (Section 8 & 10) */}
-              <div className="space-y-2.5 max-h-[520px] overflow-y-auto pr-1">
-                {liveAlerts.length === 0 ? (
-                  <div className="py-12 text-center space-y-2 bg-slate-50 rounded-xl border border-slate-100 p-4">
-                    <CheckCircle2 size={24} className="text-emerald-500 mx-auto" />
-                    <h4 className="text-xs font-bold text-slate-800">No Violations Detected</h4>
-                    <p className="text-[11px] text-slate-500">
-                      All candidates in room {selectedRoomId} are adhering to examination standards.
-                    </p>
-                  </div>
-                ) : (
-                  liveAlerts.map((alert) => {
-                    const alertType = alert.type || alert.eventType || '';
-                    const isTabDetected = alertType === 'TAB_SWITCH_DETECTED';
-                    const isTabLimit = alertType === 'TAB_SWITCH_LIMIT_EXCEEDED';
-                    const sev = String(alert.severity || (isTabLimit ? 'CRITICAL' : isTabDetected ? 'MEDIUM' : 'MEDIUM')).toUpperCase();
-                    const isHigh = sev === 'HIGH' || sev === 'CRITICAL' || sev === 'DANGER' || isTabLimit;
-                    const isMed = sev === 'MEDIUM' || isTabDetected;
-
-                    const timeStr = alert.timestamp
-                      ? new Date(alert.timestamp).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          second: '2-digit',
-                          hour12: true,
-                        })
-                      : 'Just now';
-
-                    return (
-                      <div
-                        key={alert.id}
-                        className={`p-3 rounded-xl border transition-all ${
-                          isTabLimit
-                            ? 'bg-rose-100/90 border-rose-400 text-rose-950 shadow-sm'
-                            : isHigh
-                            ? 'bg-rose-50/70 border-rose-200 text-rose-950'
-                            : isMed
-                            ? 'bg-amber-50/70 border-amber-200 text-amber-950'
-                            : 'bg-slate-50 border-slate-200 text-slate-900'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <span
-                            className={`text-[9.5px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
-                              isTabLimit || sev === 'CRITICAL'
-                                ? 'bg-rose-600 text-white animate-pulse'
-                                : isHigh
-                                ? 'bg-rose-600 text-white'
-                                : isMed
-                                ? 'bg-amber-500 text-white'
-                                : 'bg-slate-700 text-white'
-                            }`}
-                          >
-                            [{sev}]
-                          </span>
-                          <span className="text-[10px] font-mono text-slate-400 font-semibold">
-                            Time: {timeStr}
-                          </span>
-                        </div>
-
-                        {/* Alert Headline */}
-                        <div className="text-xs font-bold text-slate-900 leading-snug flex items-center gap-1.5">
-                          {isTabLimit ? (
-                            <span className="text-rose-700 flex items-center gap-1">
-                              <span className="w-2 h-2 rounded-full bg-rose-600 animate-ping inline-block" />
-                              🔴 TAB SWITCH LIMIT EXCEEDED
-                            </span>
-                          ) : isTabDetected ? (
-                            <span className="text-amber-700 flex items-center gap-1">
-                              ⚠ TAB SWITCH DETECTED
-                            </span>
-                          ) : (
-                            alert.message
-                          )}
-                        </div>
-
-                        {/* Extra Tab Switch Context */}
-                        {(isTabLimit || isTabDetected) && (
-                          <div className="text-[11px] font-mono text-slate-700 mt-0.5">
-                            {isTabLimit ? (
-                              <span className="text-rose-700 font-bold">4 / 3 — Session terminated</span>
-                            ) : (
-                              <span>Warning: <strong className="text-amber-800 font-bold">{alert.count || 1} / 3</strong></span>
-                            )}
-                          </div>
-                        )}
-
-                        <div className="text-[11px] text-slate-600 mt-1 flex items-center gap-1">
-                          <span>Student:</span>
-                          <span className="font-semibold text-slate-800">{alert.candidateName}</span>
-                        </div>
-                      </div>
-                    );
-                  })
                 )}
               </div>
+
+              {/* Room-level Statistics */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <span className="text-[10px] font-mono text-slate-500 uppercase block font-semibold">
+                    Students
+                  </span>
+                  <span className="text-2xl font-extrabold text-slate-900 mt-0.5 block">
+                    {totalRoomStudents}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-medium">Joined room</span>
+                </div>
+
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <span className="text-[10px] font-mono text-emerald-600 uppercase block font-semibold">
+                    Active
+                  </span>
+                  <span className="text-2xl font-extrabold text-emerald-600 mt-0.5 block">
+                    {activeRoomStudents}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-medium">Currently monitoring</span>
+                </div>
+
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <span className="text-[10px] font-mono text-amber-600 uppercase block font-semibold">
+                    Alerts
+                  </span>
+                  <span className="text-2xl font-extrabold text-slate-900 mt-0.5 block">
+                    {totalRoomAlerts}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-medium">Total AI alerts</span>
+                </div>
+
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <span className="text-[10px] font-mono text-rose-600 uppercase block font-semibold">
+                    Critical
+                  </span>
+                  <span className="text-2xl font-extrabold text-rose-600 mt-0.5 block">
+                    {criticalRoomAlerts}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-medium">Severe violations</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Monitoring Layout: Student Monitoring (Left 65%) + Live Alerts (Right 35%) */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              {/* STUDENT MONITORING (8 cols) */}
+              <div className="lg:col-span-8 bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center">
+                      <Users size={16} />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">STUDENT MONITORING</h3>
+                      <p className="text-[11px] text-slate-500">Live candidate verification & integrity state</p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-slate-700 bg-slate-100 px-2.5 py-1 rounded-lg">
+                    {participants.length} {participants.length === 1 ? 'Student' : 'Students'}
+                  </span>
+                </div>
+
+                {roomLoading ? (
+                  <div className="py-16 text-center space-y-2">
+                    <div className="w-7 h-7 border-2 border-slate-900 border-t-transparent rounded-full animate-spin mx-auto" />
+                    <p className="text-xs text-slate-500">Loading student participants...</p>
+                  </div>
+                ) : participants.length === 0 ? (
+                  /* Improved Empty State */
+                  <div className="p-8 text-center space-y-3 bg-slate-50/80 rounded-2xl border border-slate-200">
+                    <div className="w-14 h-14 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center mx-auto mb-1 border border-slate-200">
+                      <Users size={28} className="text-slate-500" />
+                    </div>
+                    <div>
+                      <h4 className="text-base font-extrabold text-slate-900">No students joined yet</h4>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                        Share the student join link to invite candidates to this virtual room.
+                      </p>
+                    </div>
+                    {selectedRoom && (
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={handleCopyMonitoringJoinLink}
+                          className="py-2.5 px-4 bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white text-xs font-bold rounded-xl transition inline-flex items-center gap-2 cursor-pointer shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-1"
+                          title="Copy the link students use to join this room."
+                          aria-label="Copy the link students use to join this room."
+                        >
+                          {copiedMonitoringLink ? (
+                            <>
+                              <Check size={14} className="text-emerald-400" />
+                              <span>Link Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Link size={14} className="text-slate-300" />
+                              <span>Copy Student Join Link</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-200/80 text-[10.5px] font-mono uppercase text-slate-400 tracking-wider">
+                          <th className="py-2.5 px-3">Student Name</th>
+                          <th className="py-2.5 px-2">Connection</th>
+                          <th className="py-2.5 px-2">Verification</th>
+                          <th className="py-2.5 px-2">Liveness</th>
+                          <th className="py-2.5 px-2">Identity</th>
+                          <th className="py-2.5 px-2">Attention</th>
+                          <th className="py-2.5 px-2">Risk</th>
+                          <th className="py-2.5 px-2">Alerts</th>
+                          <th className="py-2.5 px-2">Monitoring Status</th>
+                          <th className="py-2.5 px-3 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-xs">
+                        {participants.map((p, idx) => {
+                          const isTerminated = p.status === 'TERMINATED' || (p.tabSwitchCount || 0) >= 4;
+                          const riskScore = isTerminated ? 100 : (p.riskScore || 0);
+                          const rawRisk = isTerminated ? 'CRITICAL' : (p.riskLevel || (riskScore > 60 ? 'HIGH' : riskScore > 20 ? 'MEDIUM' : 'LOW'));
+                          const riskLevel = rawRisk === 'NORMAL' ? 'LOW' : rawRisk;
+                          const isVerifiedIdentity = p.identityStatus === 'VERIFIED' || p.identityStatus === 'IDENTITY_VERIFIED';
+                          const isLive = p.liveness === 'LIVE' || p.liveness === 'VERIFIED' || p.liveness === 'REAL';
+                          const attentionValue = p.attentionScore !== undefined
+                            ? p.attentionScore
+                            : (p.attention !== undefined ? p.attention : (p.gaze === 'center' ? (riskScore > 20 ? 71 : 92) : 65));
+
+                          const connState = p.connectionState || (p.status === 'LEFT' ? 'DISCONNECTED' : 'CONNECTED');
+                          const isReconnecting = connState === 'RECONNECTING';
+                          const isDisconnected = connState === 'DISCONNECTED' || p.status === 'LEFT';
+
+                          const monitoringState = p.monitoringStatus || (isTerminated ? 'TERMINATED' : (p.status === 'LEFT' ? 'STOPPED' : (p.status || 'ACTIVE')));
+
+                          return (
+                            <tr key={p.id || p.sessionId || idx} className="hover:bg-slate-50/80 transition-colors">
+                              {/* Student Name */}
+                              <td className="py-3 px-3">
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className={`w-2 h-2 rounded-full shrink-0 ${
+                                      isTerminated
+                                        ? 'bg-rose-500'
+                                        : isDisconnected
+                                        ? 'bg-slate-400'
+                                        : isReconnecting
+                                        ? 'bg-amber-500 animate-pulse'
+                                        : 'bg-emerald-500 animate-pulse'
+                                    }`}
+                                    title={`Connection: ${connState}`}
+                                  />
+                                  <div className="font-bold text-slate-900 leading-tight">
+                                    {p.name || 'Candidate'}
+                                  </div>
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1.5 mt-0.5">
+                                  <span className="truncate max-w-[140px]">{p.email || p.sessionId || 'Candidate'}</span>
+                                </div>
+                              </td>
+
+                              {/* Connection */}
+                              <td className="py-3 px-2">
+                                <span
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1.5 border ${
+                                    isReconnecting
+                                      ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                      : isDisconnected
+                                      ? 'bg-slate-100 text-slate-500 border-slate-200'
+                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  }`}
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full ${
+                                    isReconnecting
+                                      ? 'bg-amber-500 animate-ping'
+                                      : isDisconnected
+                                      ? 'bg-slate-400'
+                                      : 'bg-emerald-500'
+                                  }`} />
+                                  {isReconnecting ? 'Reconnecting' : isDisconnected ? 'Disconnected' : 'Connected'}
+                                </span>
+                              </td>
+
+                              {/* Verification */}
+                              <td className="py-3 px-2">
+                                <span
+                                  className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                                    isVerifiedIdentity || p.verified
+                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                      : p.status === 'VERIFYING'
+                                      ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                      : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                  }`}
+                                >
+                                  {isVerifiedIdentity || p.verified ? 'VERIFIED' : p.status === 'VERIFYING' ? 'VERIFYING' : 'PENDING'}
+                                </span>
+                              </td>
+
+                              {/* Liveness */}
+                              <td className="py-3 px-2">
+                                <span
+                                  className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                                    isLive
+                                      ? 'bg-emerald-50 text-emerald-700'
+                                      : 'bg-rose-50 text-rose-700 font-extrabold'
+                                  }`}
+                                >
+                                  {isLive ? 'LIVE' : 'SPOOF'}
+                                </span>
+                              </td>
+
+                              {/* Identity */}
+                              <td className="py-3 px-2">
+                                <span
+                                  className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                                    isVerifiedIdentity
+                                      ? 'bg-emerald-50 text-emerald-700'
+                                      : 'bg-amber-50 text-amber-700'
+                                  }`}
+                                >
+                                  {isVerifiedIdentity ? 'VERIFIED' : 'MISMATCH'}
+                                </span>
+                              </td>
+
+                              {/* Attention */}
+                              <td className="py-3 px-2">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-extrabold text-slate-800 font-mono text-[11px]">
+                                    {attentionValue}%
+                                  </span>
+                                </div>
+                              </td>
+
+                              {/* Risk */}
+                              <td className="py-3 px-2">
+                                <span
+                                  className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                                    riskLevel === 'CRITICAL'
+                                      ? 'bg-rose-600 text-white font-black'
+                                      : riskLevel === 'HIGH'
+                                      ? 'bg-rose-100 text-rose-800 font-extrabold'
+                                      : riskLevel === 'MEDIUM'
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-emerald-50 text-emerald-700'
+                                  }`}
+                                >
+                                  {riskLevel}
+                                </span>
+                              </td>
+
+                              {/* Alerts */}
+                              <td className="py-3 px-2 font-mono text-slate-700 font-semibold text-[11px]">
+                                {p.violations || 0}
+                              </td>
+
+                              {/* Monitoring Status */}
+                              <td className="py-3 px-2">
+                                <div>
+                                  <span
+                                    className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                                      isTerminated
+                                        ? 'bg-rose-100 text-rose-800 border border-rose-300 font-extrabold'
+                                        : monitoringState === 'ACTIVE' || monitoringState === 'MONITORING'
+                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                        : monitoringState === 'VERIFYING'
+                                        ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                        : monitoringState === 'STOPPED' || monitoringState === 'COMPLETED'
+                                        ? 'bg-slate-100 text-slate-600 border border-slate-200'
+                                        : 'bg-slate-100 text-slate-500'
+                                    }`}
+                                  >
+                                    {isTerminated ? 'TERMINATED' : monitoringState}
+                                  </span>
+                                  {isTerminated && (
+                                    <div className="text-[9px] text-rose-600 font-bold uppercase mt-0.5 leading-tight">
+                                      {p.terminationReason || 'TAB SWITCH LIMIT EXCEEDED'}
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+
+                              {/* Actions */}
+                              <td className="py-3 px-3 text-right">
+                                <div className="inline-flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedParticipant(p);
+                                      setIsParticipantModalOpen(true);
+                                    }}
+                                    className="py-1 px-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-[10.5px] transition cursor-pointer"
+                                    title="Inspect Live Student Details & Perceptions"
+                                  >
+                                    View Student
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedSessionId(p.sessionId);
+                                      setIsReportModalOpen(true);
+                                    }}
+                                    className="py-1 px-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold text-[10.5px] transition cursor-pointer flex items-center gap-1"
+                                    title="Open Candidate Proctoring Integrity Report"
+                                  >
+                                    <FileText size={11} />
+                                    <span>Report</span>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* LIVE ALERTS (4 cols) */}
+              <div className="lg:col-span-4 bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                      <Radio size={16} className="animate-pulse" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">LIVE ALERTS</h3>
+                      <p className="text-[11px] text-slate-500">Real-time AI violation stream</p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full">
+                    {liveAlerts.length}
+                  </span>
+                </div>
+
+                {/* Real-time alert list */}
+                <div className="space-y-2.5 max-h-[520px] overflow-y-auto pr-1">
+                  {liveAlerts.length === 0 ? (
+                    /* Improved Green / Neutral Status */
+                    <div className="py-12 text-center space-y-2 bg-slate-50/80 rounded-xl border border-slate-200/80 p-5">
+                      <div className="w-11 h-11 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center mx-auto mb-1">
+                        <ShieldCheck size={24} />
+                      </div>
+                      <h4 className="text-xs font-bold text-slate-900">No violations detected</h4>
+                      <p className="text-[11px] text-slate-500 max-w-[240px] mx-auto">
+                        AI monitoring is active. New alerts will appear here.
+                      </p>
+                    </div>
+                  ) : (
+                    liveAlerts.map((alert) => {
+                      const alertType = alert.type || alert.eventType || 'AI_ALERT';
+                      const isTabDetected = alertType === 'TAB_SWITCH_DETECTED';
+                      const isTabLimit = alertType === 'TAB_SWITCH_LIMIT_EXCEEDED';
+                      const rawSev = String(alert.severity || (isTabLimit ? 'CRITICAL' : isTabDetected ? 'MEDIUM' : 'MEDIUM')).toUpperCase();
+                      const isCritical = rawSev === 'CRITICAL' || rawSev === 'HIGH' || rawSev === 'DANGER' || isTabLimit;
+                      const alertStatus = alert.status || (alert.resolved ? 'RESOLVED' : 'ACTIVE');
+
+                      const timeStr = alert.timestamp
+                        ? new Date(alert.timestamp).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                            hour12: true,
+                          })
+                        : 'Just now';
+
+                      return (
+                        <div
+                          key={alert.id}
+                          className={`p-3 rounded-xl border transition-all ${
+                            isCritical
+                              ? 'bg-rose-50/80 border-rose-200 text-rose-950 shadow-xs'
+                              : 'bg-amber-50/80 border-amber-200 text-amber-950'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-1.5">
+                            {/* Severity Indicator: Warning / Critical */}
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`text-[9.5px] font-mono font-extrabold px-1.5 py-0.5 rounded flex items-center gap-1 uppercase tracking-wider ${
+                                  isCritical
+                                    ? 'bg-rose-600 text-white'
+                                    : 'bg-amber-500 text-white'
+                                }`}
+                              >
+                                {isCritical ? (
+                                  <>
+                                    <AlertTriangle size={10} />
+                                    <span>Critical</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <AlertCircle size={10} />
+                                    <span>Warning</span>
+                                  </>
+                                )}
+                              </span>
+
+                              {/* Status badge */}
+                              <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-white/80 text-slate-700 border border-slate-200 uppercase">
+                                {alertStatus}
+                              </span>
+                            </div>
+
+                            <span className="text-[10px] font-mono text-slate-500 font-medium">
+                              {timeStr}
+                            </span>
+                          </div>
+
+                          {/* Alert Headline */}
+                          <div className="text-xs font-bold text-slate-900 leading-snug flex items-center gap-1.5">
+                            {isTabLimit ? (
+                              <span className="text-rose-700 flex items-center gap-1">
+                                <span className="w-2 h-2 rounded-full bg-rose-600 animate-ping inline-block" />
+                                TAB SWITCH LIMIT EXCEEDED
+                              </span>
+                            ) : isTabDetected ? (
+                              <span className="text-amber-800 flex items-center gap-1">
+                                TAB SWITCH DETECTED
+                              </span>
+                            ) : (
+                              alert.message
+                            )}
+                          </div>
+
+                          <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                            Type: <span className="font-semibold text-slate-700">{alertType.replace(/_/g, ' ')}</span>
+                          </div>
+
+                          {/* Extra Tab Switch Context */}
+                          {(isTabLimit || isTabDetected) && (
+                            <div className="text-[11px] font-mono text-slate-700 mt-0.5">
+                              {isTabLimit ? (
+                                <span className="text-rose-700 font-bold">4 / 3 — Session terminated</span>
+                              ) : (
+                                <span>Violations: <strong className="text-amber-800 font-bold">{alert.count || 1} / 3</strong></span>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="text-[11px] text-slate-600 mt-1.5 pt-1.5 border-t border-slate-200/50 flex items-center justify-between">
+                            <div>
+                              <span className="text-slate-400">Student: </span>
+                              <span className="font-bold text-slate-800">{alert.candidateName}</span>
+                            </div>
+                            {alert.candidateId && (
+                              <span className="text-[9.5px] font-mono text-slate-400">
+                                ID: {String(alert.candidateId).slice(-6)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
         )
       )}
 
       {/* =========================================================================
-          MODALS: Participant Details & Student Integrity Report (Section 9)
+          END EXAM CONFIRMATION MODAL
+          ========================================================================= */}
+      <AnimatePresence>
+        {showEndExamModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-fade-in"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="end-exam-title"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.15 }}
+              className="bg-white rounded-2xl border border-slate-200 max-w-md w-full p-6 shadow-2xl space-y-5"
+            >
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 border border-rose-200">
+                  <StopCircle size={26} />
+                </div>
+                <div className="space-y-1">
+                  <h3 id="end-exam-title" className="text-lg font-extrabold text-slate-900">
+                    End Exam?
+                  </h3>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Are you sure you want to end this examination session?
+                    Students will no longer be able to continue the exam.
+                  </p>
+                </div>
+              </div>
+
+              {selectedRoom && (
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Room:</span>
+                    <span className="font-bold text-slate-800">{selectedRoom.title || selectedRoomId}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Active Students:</span>
+                    <span className="font-bold text-slate-800 font-mono">{activeRoomStudents}</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  autoFocus
+                  disabled={endingRoom}
+                  onClick={() => setShowEndExamModal(false)}
+                  className="py-2.5 px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 text-xs font-bold transition cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={endingRoom}
+                  onClick={confirmEndExam}
+                  className="py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-xs disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-600 focus-visible:ring-offset-1"
+                >
+                  {endingRoom ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      <span>Ending Exam...</span>
+                    </>
+                  ) : (
+                    <>
+                      <StopCircle size={14} />
+                      <span>End Exam</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =========================================================================
+          MODALS: Participant Details & Student Integrity Report
           ========================================================================= */}
       {/* 1. Student Detail Inspection Modal */}
       <ParticipantDetailModal
@@ -1571,7 +2087,7 @@ export default function ProctorDashboard() {
         }}
       />
 
-      {/* 2. Official TrueView AI Proctoring Integrity Report Modal (Section 9) */}
+      {/* 2. Official TrueView AI Proctoring Integrity Report Modal */}
       <ReportDetailModal
         isOpen={isReportModalOpen}
         onClose={() => setIsReportModalOpen(false)}

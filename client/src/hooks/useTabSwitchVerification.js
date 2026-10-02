@@ -2,10 +2,21 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 
+const isDev = Boolean(
+  (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') ||
+  (typeof import.meta !== 'undefined' && import.meta.env?.DEV)
+);
+
 /**
- * Reusable Tab Switch Verification Hook
- * Detects when a candidate leaves the examination/interview browser tab or window.
- * Strictly enforces a max allowed limit of 3 warnings, terminating on the 4th violation.
+ * Authoritative Tab Switch Verification Hook
+ * 
+ * Rules:
+ * 1. Uses document.visibilitychange / document.visibilityState as the PRIMARY signal.
+ * 2. NEVER uses window.blur() or focus events to detect tab switching.
+ * 3. Never counts initial page load, camera/mic permissions, or internal UI interactions.
+ * 4. Requires a real VISIBLE -> HIDDEN -> VISIBLE transition with hiddenDuration >= minHiddenDurationMs (default 500ms).
+ * 5. Uses unique episode ID and debouncing so a single episode increments exactly once.
+ * 6. Enforces strict 3-warning policy: 1/3 Warning, 2/3 Warning, 3/3 Final Warning, 4/3 Terminate.
  */
 export default function useTabSwitchVerification({
   sessionId,
@@ -13,6 +24,8 @@ export default function useTabSwitchVerification({
   studentId,
   enabled = true,
   maxAllowed = 3,
+  minHiddenDurationMs = 500,
+  gracePeriodMs = 2500,
   onTerminated,
 }) {
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
@@ -21,10 +34,47 @@ export default function useTabSwitchVerification({
   const [isTerminated, setIsTerminated] = useState(false);
   const [terminationReason, setTerminationReason] = useState(null);
   const [currentWarning, setCurrentWarning] = useState(null);
+  const [isMonitoringInitialized, setIsMonitoringInitialized] = useState(false);
 
-  const lastTriggerTimeRef = useRef(0);
-  const isTerminatedRef = useRef(false);
+  // Mutable refs to prevent stale closures and avoid unnecessary listener re-registrations
   const countRef = useRef(0);
+  const isTerminatedRef = useRef(false);
+  const isMonitoringInitializedRef = useRef(false);
+  const lastTriggerTimeRef = useRef(0);
+  const enabledRef = useRef(enabled);
+  const onTerminatedRef = useRef(onTerminated);
+
+  // Visibility state machine refs
+  const hasActiveEpisodeRef = useRef(false);
+  const hiddenAtRef = useRef(null);
+  const episodeIdRef = useRef(null);
+
+  useEffect(() => {
+    enabledRef.current = enabled;
+  }, [enabled]);
+
+  useEffect(() => {
+    onTerminatedRef.current = onTerminated;
+  }, [onTerminated]);
+
+  // Development-only diagnostic logging
+  const logTabDebug = useCallback((fields) => {
+    if (!isDev) return;
+    const prefix = '[TAB DEBUG]';
+    console.groupCollapsed(
+      `${prefix} ${fields.event || 'Visibility Event'} — Tab Switches: ${countRef.current} / ${maxAllowed}`
+    );
+    if (fields.visibilityState !== undefined) console.log(`${prefix} visibilityState:`, fields.visibilityState);
+    if (fields.hiddenAt !== undefined) console.log(`${prefix} hiddenAt:`, fields.hiddenAt);
+    if (fields.hiddenDuration !== undefined) console.log(`${prefix} hiddenDuration:`, `${Math.round(fields.hiddenDuration)} ms`);
+    if (fields.initialized !== undefined) console.log(`${prefix} initialized:`, fields.initialized);
+    if (fields.episodeId !== undefined) console.log(`${prefix} episodeId:`, fields.episodeId);
+    if (fields.confirmedTabSwitch !== undefined) console.log(`${prefix} confirmedTabSwitch:`, fields.confirmedTabSwitch);
+    if (fields.tabSwitchCount !== undefined) console.log(`${prefix} tabSwitchCount:`, fields.tabSwitchCount);
+    if (fields.terminationTriggered !== undefined) console.log(`${prefix} terminationTriggered:`, fields.terminationTriggered);
+    if (fields.reason !== undefined) console.log(`${prefix} note:`, fields.reason);
+    console.groupEnd();
+  }, [maxAllowed]);
 
   // 1. Recover existing tab switch count and state on mount / reconnection
   useEffect(() => {
@@ -55,8 +105,8 @@ export default function useTabSwitchVerification({
             setLastEventTime(new Date(lastEvt.timestamp));
           }
 
-          if (terminated && onTerminated) {
-            onTerminated(s.terminationReason || 'Maximum tab-switch limit exceeded');
+          if (terminated && onTerminatedRef.current) {
+            onTerminatedRef.current(s.terminationReason || 'Maximum tab-switch limit exceeded');
           }
         }
       } catch (_) {}
@@ -66,33 +116,74 @@ export default function useTabSwitchVerification({
     return () => {
       isMounted = false;
     };
-  }, [sessionId, onTerminated]);
+  }, [sessionId]);
 
-  // 2. Authoritative tab switch trigger handler with 2000ms debouncing / cooldown
-  const handleTabSwitch = useCallback(async () => {
-    if (!enabled || isTerminatedRef.current || !sessionId) return;
+  // 2. Controlled initialization guard: protects page load, camera/mic permissions, and media startup
+  useEffect(() => {
+    if (!enabled || !sessionId) {
+      isMonitoringInitializedRef.current = false;
+      setIsMonitoringInitialized(false);
+      return;
+    }
 
-    const now = Date.now();
-    // Enforce cooldown to prevent double firing (e.g. visibilitychange + blur within 2s)
-    if (now - lastTriggerTimeRef.current < 2000) return;
-    lastTriggerTimeRef.current = now;
+    // Record initial document visibility state without incrementing counter
+    const initialVisibility = typeof document !== 'undefined' ? document.visibilityState : 'visible';
+    logTabDebug({
+      event: 'Monitoring Startup (Grace Period Active)',
+      visibilityState: initialVisibility,
+      initialized: false,
+      reason: 'Grace period running to allow camera/mic permission acquisition and media startup',
+    });
+
+    // Enforce grace period to protect permission dialogs and media startup
+    const timer = setTimeout(() => {
+      isMonitoringInitializedRef.current = true;
+      setIsMonitoringInitialized(true);
+      logTabDebug({
+        event: 'Monitoring Initialized (Ready for Tab Switch Detection)',
+        visibilityState: typeof document !== 'undefined' ? document.visibilityState : 'visible',
+        initialized: true,
+      });
+    }, gracePeriodMs);
+
+    return () => {
+      clearTimeout(timer);
+      isMonitoringInitializedRef.current = false;
+      setIsMonitoringInitialized(false);
+    };
+  }, [enabled, sessionId, gracePeriodMs, logTabDebug]);
+
+  // 3. Authoritative server communication when a validated tab switch is confirmed
+  const recordValidatedTabSwitch = useCallback(async (epId, durationMs) => {
+    if (!enabledRef.current || isTerminatedRef.current || !sessionId) return;
 
     try {
       const res = await api.post(`/ai-engine/sessions/${sessionId}/tab-switch`, {
         roomId: roomId || undefined,
         studentId: studentId || undefined,
+        episodeId: epId,
+        hiddenDuration: Math.round(durationMs),
         timestamp: new Date().toISOString(),
       });
 
       if (res.data?.success) {
         const newCount = res.data.count;
         const newStatus = res.data.tabSwitchStatus;
-        const terminated = res.data.terminated;
+        const terminated = Boolean(res.data.terminated);
 
         countRef.current = newCount;
         setTabSwitchCount(newCount);
         setTabSwitchStatus(newStatus);
         setLastEventTime(new Date());
+
+        logTabDebug({
+          event: 'Server Recorded Tab Switch',
+          tabSwitchCount: newCount,
+          visibilityState: document.visibilityState,
+          episodeId: epId,
+          confirmedTabSwitch: true,
+          terminationTriggered: terminated,
+        });
 
         let warningTitle = 'Tab switch detected';
         let warningText = '';
@@ -119,43 +210,160 @@ export default function useTabSwitchVerification({
           setTerminationReason('Maximum tab-switch limit exceeded');
           toast.error('Session terminated: Maximum tab-switch limit exceeded.', { duration: 8000, id: 'tab-switch-toast' });
 
-          if (onTerminated) {
-            onTerminated('Maximum tab-switch limit exceeded');
+          if (onTerminatedRef.current) {
+            onTerminatedRef.current('Maximum tab-switch limit exceeded');
           }
         }
       }
     } catch (err) {
       console.warn('[useTabSwitchVerification] Error recording tab switch:', err);
     }
-  }, [enabled, sessionId, roomId, studentId, onTerminated]);
+  }, [sessionId, roomId, studentId, logTabDebug]);
 
-  // 3. Register browser visibilitychange and blur listeners
+  // 4. Document Visibility State Machine (Strictly document.visibilitychange only, NO window.blur)
   useEffect(() => {
     if (!enabled || !sessionId) return;
 
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        handleTabSwitch();
+      const currentState = document.visibilityState;
+
+      // Ignore all signals if monitoring is not yet fully initialized (protects permission requests)
+      if (!isMonitoringInitializedRef.current) {
+        logTabDebug({
+          event: 'Pre-Init Visibility Event Ignored',
+          visibilityState: currentState,
+          initialized: false,
+          reason: 'Monitoring not yet initialized, permission dialog or load in progress',
+        });
+        return;
+      }
+
+      // Ignore if session is already terminated
+      if (isTerminatedRef.current) return;
+
+      if (currentState === 'hidden') {
+        // Debounce multiple consecutive hidden events: only the first VISIBLE -> HIDDEN transition initiates the episode
+        if (hasActiveEpisodeRef.current) {
+          logTabDebug({
+            event: 'Consecutive Hidden Event Ignored (Already in Episode)',
+            visibilityState: 'hidden',
+            episodeId: episodeIdRef.current,
+            confirmedTabSwitch: false,
+          });
+          return;
+        }
+
+        // Start unique visibility loss episode
+        hasActiveEpisodeRef.current = true;
+        hiddenAtRef.current = performance.now();
+        const epId = `ep_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+        episodeIdRef.current = epId;
+
+        logTabDebug({
+          event: 'Document Hidden (Episode Started)',
+          visibilityState: 'hidden',
+          hiddenAt: Math.round(hiddenAtRef.current),
+          episodeId: epId,
+          confirmedTabSwitch: false,
+        });
+      } else if (currentState === 'visible') {
+        // Document returned to visible: validate the transition
+        if (!hasActiveEpisodeRef.current || hiddenAtRef.current === null) {
+          logTabDebug({
+            event: 'Visible Event without Hidden Episode (Ignored)',
+            visibilityState: 'visible',
+            confirmedTabSwitch: false,
+          });
+          return;
+        }
+
+        const hiddenDuration = performance.now() - hiddenAtRef.current;
+        const epId = episodeIdRef.current;
+
+        // Reset episode tracker immediately so duplicate visible events cannot re-trigger
+        hasActiveEpisodeRef.current = false;
+        hiddenAtRef.current = null;
+        episodeIdRef.current = null;
+
+        // Validation Rule: Require minimum hidden duration (default >= 500ms)
+        if (hiddenDuration < minHiddenDurationMs) {
+          logTabDebug({
+            event: 'Transient Visibility Blip Ignored (< 500ms threshold)',
+            visibilityState: 'visible',
+            hiddenDuration,
+            episodeId: epId,
+            confirmedTabSwitch: false,
+            reason: `Duration ${Math.round(hiddenDuration)}ms is below required ${minHiddenDurationMs}ms threshold`,
+          });
+          return;
+        }
+
+        // Validation Rule: Debounce cooldown between confirmed tab switches (2000ms)
+        const now = Date.now();
+        if (now - lastTriggerTimeRef.current < 2000) {
+          logTabDebug({
+            event: 'Cooldown Debounce Active (Ignored)',
+            visibilityState: 'visible',
+            hiddenDuration,
+            episodeId: epId,
+            confirmedTabSwitch: false,
+            reason: 'Triggered within 2000ms cooldown window',
+          });
+          return;
+        }
+        lastTriggerTimeRef.current = now;
+
+        // VALIDATED TAB SWITCH CONFIRMED
+        logTabDebug({
+          event: 'CONFIRMED TAB SWITCH (HIDDEN -> VISIBLE Validated)',
+          visibilityState: 'visible',
+          hiddenDuration,
+          episodeId: epId,
+          confirmedTabSwitch: true,
+          tabSwitchCount: countRef.current + 1,
+        });
+
+        recordValidatedTabSwitch(epId, hiddenDuration);
       }
     };
 
-    const onWindowBlur = () => {
-      // Delay slightly and check if document lost focus (not an in-app click or modal focus)
-      setTimeout(() => {
-        if (!document.hasFocus() || document.visibilityState === 'hidden') {
-          handleTabSwitch();
-        }
-      }, 100);
-    };
-
+    // Strictly register visibilitychange listener ONLY — NEVER window.blur or focus
     document.addEventListener('visibilitychange', onVisibilityChange);
-    window.addEventListener('blur', onWindowBlur);
 
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
-      window.removeEventListener('blur', onWindowBlur);
+      hasActiveEpisodeRef.current = false;
+      hiddenAtRef.current = null;
+      episodeIdRef.current = null;
     };
-  }, [enabled, sessionId, handleTabSwitch]);
+  }, [enabled, sessionId, minHiddenDurationMs, logTabDebug, recordValidatedTabSwitch]);
+
+  // 5. Authoritatively reset tab switch state back to 0/3 (recovers from corrupted false states)
+  const resetTabSwitches = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const res = await api.post(`/ai-engine/sessions/${sessionId}/reset-tab-switches`, {
+        roomId: roomId || undefined,
+      });
+      if (res.data?.success) {
+        countRef.current = 0;
+        setTabSwitchCount(0);
+        setTabSwitchStatus('NORMAL');
+        setIsTerminated(false);
+        isTerminatedRef.current = false;
+        setTerminationReason(null);
+        setCurrentWarning(null);
+        toast.success('Tab switch count reset to 0 / 3', { id: 'tab-switch-reset-toast' });
+        logTabDebug({
+          event: 'Tab Switches Authoritatively Reset to 0 / 3',
+          tabSwitchCount: 0,
+          confirmedTabSwitch: false,
+        });
+      }
+    } catch (err) {
+      console.warn('[useTabSwitchVerification] Reset error:', err);
+    }
+  }, [sessionId, roomId, logTabDebug]);
 
   const clearWarning = useCallback(() => {
     setCurrentWarning(null);
@@ -169,7 +377,9 @@ export default function useTabSwitchVerification({
     isTerminated,
     terminationReason,
     currentWarning,
+    isMonitoringInitialized,
     clearWarning,
-    triggerTabSwitch: handleTabSwitch,
+    resetTabSwitches,
+    triggerTabSwitch: () => recordValidatedTabSwitch(`ep_manual_${Date.now()}`, 1000),
   };
 }

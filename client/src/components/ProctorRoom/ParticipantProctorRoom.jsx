@@ -89,6 +89,8 @@ export default function ParticipantProctorRoom({
     aiFps: 18,
     aiLatencyMs: 0,
     trustScore: 100,
+    riskScore: 0,
+    monitoringMode: 'MODERATE',
     aiEngineOnline: true
   });
 
@@ -393,12 +395,17 @@ export default function ParticipantProctorRoom({
             aiFps: Math.round(Number(data.performance?.fps) || 10),
             aiLatencyMs: Math.round(Number(data.performance?.latency_ms) || 0),
             trustScore: Math.round(data.risk?.current ? 100 - data.risk.current : 100),
+            riskScore: Math.round(data.risk?.current ?? (100 - (data.trustScore ?? 100))),
+            monitoringMode: data.session_context?.monitoring_profile || 'MODERATE',
             aiEngineOnline: true
           });
 
           // Emit behaviour events ONLY on state transitions (dedup per event type).
           if (data.behaviour?.events?.length) {
             data.behaviour.events.forEach(evt => {
+              if (evt.should_alert === false || evt.in_cooldown === true || evt.state === 'COOLDOWN' || evt.state === 'OBSERVING') {
+                return;
+              }
               const evtState = String(evt.state || 'CONFIRMED').toUpperCase();
               const lastState = emittedEventStatesRef.current[evt.type];
               if (lastState === evtState) return; // no transition -> no duplicate alert
@@ -506,11 +513,21 @@ export default function ParticipantProctorRoom({
           )}
         </div>
 
-        {/* Right: Surveillance Badge & Exit */}
+        {/* Right: Calm & Professional Monitoring Status Badge & Exit */}
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 text-xs font-mono font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-500/60 px-3.5 py-1.5 rounded-xl shadow-sm">
-            <Shield size={14} className="text-emerald-400" />
-            <span className="tracking-wide">SURVEILLANCE ACTIVE</span>
+          <div className="flex items-center gap-2.5 text-xs font-mono font-medium text-zinc-300 bg-zinc-900/90 border border-zinc-700/60 px-3.5 py-1.5 rounded-xl shadow-sm">
+            <span className="flex items-center gap-1.5 font-bold text-emerald-400">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              MONITORING
+            </span>
+            <span className="text-zinc-600">|</span>
+            <span className="text-zinc-400">
+              Mode: <span className="font-semibold text-white">{aiTelemetry.monitoringMode || 'MODERATE'}</span>
+            </span>
+            <span className="text-zinc-600">|</span>
+            <span className="text-zinc-400">
+              Risk: <span className={`font-bold ${(aiTelemetry.riskScore ?? 0) > 60 ? 'text-red-400' : (aiTelemetry.riskScore ?? 0) > 30 ? 'text-amber-400' : 'text-emerald-400'}`}>{aiTelemetry.riskScore ?? 0} / 100</span>
+            </span>
           </div>
 
           <button

@@ -7,8 +7,10 @@ const {
   getSessions,
   getSessionById,
   uploadSessionRecording,
+  startSession,
   endSession,
-  recordTabSwitch
+  recordTabSwitch,
+  resetTabSwitches
 } = require('../controllers/unifiedController');
 const { protect, optionalProtect } = require('../middleware/authMiddleware');
 
@@ -19,7 +21,9 @@ router.get('/alerts', protect, getAlerts);
 router.get('/sessions', protect, getSessions);
 router.get('/sessions/:sessionId', optionalProtect, getSessionById);
 router.post('/sessions/:sessionId/recording', uploadSessionRecording);
+router.post('/sessions/:sessionId/start', optionalProtect, startSession);
 router.post('/sessions/:sessionId/end', optionalProtect, endSession);
 router.post('/sessions/:sessionId/tab-switch', optionalProtect, recordTabSwitch);
+router.post('/sessions/:sessionId/reset-tab-switches', optionalProtect, resetTabSwitches);
 
 module.exports = router;

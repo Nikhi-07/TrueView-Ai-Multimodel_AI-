@@ -65,11 +65,14 @@ export default function AppRoutes() {
 
           <Route element={<DashboardLayout />}>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/rooms" element={<RoomManager />} />
             <Route path="/proctor-dashboard" element={<ProctorDashboard />} />
             <Route path="/sessions" element={<Sessions />} />
+            <Route path="/my-sessions" element={<Sessions />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/alerts" element={<Alerts />} />
+            <Route path="/my-alerts" element={<Alerts />} />
             <Route path="/analytics" element={<Analytics />} />
             
             {/* Admin Only Route */}

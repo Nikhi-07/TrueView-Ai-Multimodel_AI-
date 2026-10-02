@@ -15,7 +15,7 @@ import useTabSwitchVerification from '../hooks/useTabSwitchVerification';
 import TabSwitchIndicator from '../components/Monitoring/TabSwitchIndicator';
 
 const CONTEXT_OPTIONS = [
-  { id: 'EXAM', label: 'Examination (Strict)' },
+  { id: 'EXAM', label: 'Examination (Moderate)' },
   { id: 'INTERVIEW', label: 'Interview (Conversational)' },
   { id: 'ONLINE_CLASS', label: 'Online Class' },
   { id: 'MEETING', label: 'Meeting' },
@@ -57,6 +57,18 @@ export default function LiveMonitoring() {
     sessionIdRef.current = paramSessionId;
   }
 
+  // Expose active session ID and room ID for TrueView browser extension integration
+  useEffect(() => {
+    if (sessionIdRef.current) {
+      window.__TRUEVIEW_SESSION_ID__ = sessionIdRef.current;
+      localStorage.setItem('trueview_current_session_id', sessionIdRef.current);
+    }
+    if (roomId) {
+      window.__TRUEVIEW_ROOM_ID__ = roomId;
+      localStorage.setItem('trueview_current_room_id', roomId);
+    }
+  }, [paramSessionId, roomId]);
+
   const timerRef = useRef(null);
   const unifiedLoopRef = useRef(null);
   const reportGeneratedRef = useRef(false);
@@ -74,6 +86,65 @@ export default function LiveMonitoring() {
   const aiInFlightRef = useRef(false);
   const monitoringActiveRef = useRef(false);
   const emittedEventsRef = useRef({});
+
+  // Frame scheduler & latest-frame buffer (Requirements 3, 4, 15)
+  const latestFrameBufferRef = useRef(null);
+  const inferenceRunningRef = useRef(false);
+  const inferenceSeqRef = useRef(0);
+  const latestProcessedSeqRef = useRef(0);
+  const frameSamplerIntervalRef = useRef(null);
+
+  // Performance telemetry & timing instrumentation (Requirements 1, 13, 14)
+  const completedInferencesRef = useRef([]);
+  const lastSocketTelemetryEmitRef = useRef(0);
+  const [showPerfDetails, setShowPerfDetails] = useState(false);
+  const [pipelineMetrics, setPipelineMetrics] = useState({
+    cameraFps: 30,
+    aiFps: 0,
+    inferenceLatency: 0,
+    decisionLatency: 0,
+    uiLatency: 0,
+    endToEndLatency: 0,
+    p95Latency: 0,
+    health: 'LIVE',
+  });
+
+  const recordTimingMetric = useCallback((sample) => {
+    const now = performance.now();
+    completedInferencesRef.current.push({ ...sample, ts: now });
+    if (completedInferencesRef.current.length > 30) {
+      completedInferencesRef.current.shift();
+    }
+
+    const recent = completedInferencesRef.current;
+    const windowStart = now - 2000;
+    const windowSamples = recent.filter(s => s.ts >= windowStart);
+    const aiFps = windowSamples.length > 1 
+      ? Math.round((windowSamples.length * 1000) / (now - windowSamples[0].ts))
+      : Math.round(windowSamples.length / 2);
+
+    const sortedLatencies = [...recent.map(s => s.inferenceLatency)].sort((a, b) => a - b);
+    const avgLatency = sortedLatencies.length ? Math.round(sortedLatencies.reduce((a, b) => a + b, 0) / sortedLatencies.length) : 0;
+    const p95Idx = Math.min(sortedLatencies.length - 1, Math.floor(sortedLatencies.length * 0.95));
+    const p95Latency = sortedLatencies[p95Idx] || avgLatency;
+
+    const cameraFps = cameraFeedRef.current?.getCameraFps?.() || 30;
+
+    let health = 'HEALTHY';
+    if (avgLatency > 220 || (aiFps > 0 && aiFps < 5)) health = 'THROTTLED';
+    else if (avgLatency > 400 || (aiFps > 0 && aiFps < 3)) health = 'DEGRADED';
+
+    setPipelineMetrics({
+      cameraFps,
+      aiFps,
+      inferenceLatency: sample.inferenceLatency,
+      decisionLatency: sample.decisionLatency,
+      uiLatency: sample.uiLatency,
+      endToEndLatency: sample.endToEndLatency,
+      p95Latency,
+      health,
+    });
+  }, []);
 
   // Recover existing session alerts and state on page refresh
   useEffect(() => {
@@ -137,12 +208,16 @@ export default function LiveMonitoring() {
     isTerminated: isTabTerminated,
     currentWarning: tabWarning,
     clearWarning: clearTabWarning,
+    resetTabSwitches,
+    isMonitoringInitialized,
   } = useTabSwitchVerification({
     sessionId: sessionIdRef.current,
     roomId: roomId || undefined,
     studentId: user?._id || user?.id || undefined,
-    enabled: isMonitoringActive && !isSessionTerminatedRef.current,
+    enabled: isMonitoringActive && !isSessionTerminatedRef.current && isCamOn,
     maxAllowed: 3,
+    minHiddenDurationMs: 500,
+    gracePeriodMs: 2500,
     onTerminated: handleTabSwitchTerminated,
   });
 
@@ -171,14 +246,16 @@ export default function LiveMonitoring() {
 
     socket.on('connect', () => {
       console.log(`[LiveMonitoring] Connected to socket room: room_${sessionIdRef.current} (Room: ${roomId})`);
-      socket.emit('join_room', {
+      const joinPayload = {
         sessionId: sessionIdRef.current,
         roomId: roomId || undefined,
         role: 'participant',
         user: user ? { id: String(user._id || user.id), name: user.fullName || user.name, email: user.email, role: user.role } : null,
         sessionType,
         sessionDuration: 3600
-      });
+      };
+      socket.emit('ROOM_JOIN', joinPayload);
+      socket.emit('join_room', joinPayload);
       socket.emit('join-session', { sessionId: sessionIdRef.current, roomId: roomId || undefined });
     });
 
@@ -534,6 +611,12 @@ export default function LiveMonitoring() {
     // 4. Cancel AI processing loops and timers
     monitoringActiveRef.current = false;
     aiInFlightRef.current = false;
+    inferenceRunningRef.current = false;
+    latestFrameBufferRef.current = null;
+    if (frameSamplerIntervalRef.current) {
+      clearInterval(frameSamplerIntervalRef.current);
+      frameSamplerIntervalRef.current = null;
+    }
     if (unifiedLoopRef.current) {
       clearTimeout(unifiedLoopRef.current);
       unifiedLoopRef.current = null;
@@ -550,9 +633,26 @@ export default function LiveMonitoring() {
       } catch (_) {}
     }
 
-    // 6. Cleanly disconnect socket listeners
+    // 6. Cleanly notify room and disconnect socket
     if (socketRef.current) {
       try {
+        if (socketRef.current.connected) {
+          socketRef.current.emit('MONITORING_STOPPED', {
+            roomId: roomId || undefined,
+            sessionId: sessionIdRef.current,
+            candidateId: user ? String(user._id || user.id) : undefined,
+          });
+          socketRef.current.emit('ROOM_LEAVE', {
+            roomId: roomId || undefined,
+            sessionId: sessionIdRef.current,
+            candidateId: user ? String(user._id || user.id) : undefined,
+          });
+          socketRef.current.emit('leave_room', {
+            roomId: roomId || undefined,
+            sessionId: sessionIdRef.current,
+            candidateId: user ? String(user._id || user.id) : undefined,
+          });
+        }
         socketRef.current.disconnect();
       } catch (_) {}
       socketRef.current = null;
@@ -649,28 +749,72 @@ export default function LiveMonitoring() {
     setIsMonitoringActive(true);
     monitoringActiveRef.current = true;
 
-    // Latest-frame loop: one in-flight request at a time, reschedule after each iteration
-    const scheduleNext = (delay = 100) => {
-      if (!monitoringActiveRef.current) return;
-      unifiedLoopRef.current = setTimeout(runIteration, delay);
+    // Emit authoritative MONITORING_STARTED event to virtual room
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('MONITORING_STARTED', {
+        roomId: roomId || undefined,
+        sessionId: sessionIdRef.current,
+        candidateId: user ? String(user._id || user.id) : undefined,
+      });
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // HIGH-EFFICIENCY LATEST-FRAME DETECTION PIPELINE (Requirements 2, 3, 4, 12, 15)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    // 1. Independent Frame Sampler: captures latest frame at ~15 FPS (every 66ms)
+    // Decoupled from camera rendering. Never queues up frames; only keeps the newest frame.
+    const startFrameSampler = () => {
+      if (frameSamplerIntervalRef.current) clearInterval(frameSamplerIntervalRef.current);
+
+      frameSamplerIntervalRef.current = setInterval(() => {
+        if (!monitoringActiveRef.current || isSessionTerminatedRef.current) return;
+
+        // Capture downscaled 640px JPEG frame with reused canvas (zero DOM thrashing)
+        const frame = cameraFeedRef.current?.captureFrameBase64?.(640, 0.65);
+        if (!frame) return;
+
+        const captureTs = performance.now();
+        const seq = ++inferenceSeqRef.current;
+        const samples = audioSamplesRef.current;
+
+        // Requirement 4 & 15: Buffer ONLY the latest frame. Intermediate unconsumed frames are discarded.
+        latestFrameBufferRef.current = {
+          frame,
+          captureTs,
+          audioSamples: samples && samples.length ? samples : null,
+          seq,
+        };
+
+        // Trigger consumer worker if not already processing
+        if (!inferenceRunningRef.current) {
+          processLatestFrameWorker();
+        }
+      }, 66); // ~15 FPS sampling
     };
 
-    const runIteration = async () => {
-      if (!monitoringActiveRef.current) return;
-      if (aiInFlightRef.current) {
-        scheduleNext(60);
-        return;
-      }
+    // 2. Latest-Frame Consumer Worker (Processes latest frame, never creates backlog)
+    const processLatestFrameWorker = async () => {
+      if (inferenceRunningRef.current || !monitoringActiveRef.current) return;
+      inferenceRunningRef.current = true;
 
-      const frame = cameraFeedRef.current?.captureFrameBase64();
-      const samples = audioSamplesRef.current;
-      if (!frame) {
-        scheduleNext();
-        return;
-      }
+      try {
+        while (latestFrameBufferRef.current && monitoringActiveRef.current) {
+          // Atomically grab newest available frame and clear buffer
+          const frameData = latestFrameBufferRef.current;
+          latestFrameBufferRef.current = null;
 
-      aiInFlightRef.current = true;
-      const captureTs = Date.now();
+          await runInference(frameData);
+        }
+      } finally {
+        inferenceRunningRef.current = false;
+      }
+    };
+
+    // 3. Inference Execution with Sequence Check & Immediate Alert Reflection
+    const runInference = async (frameData) => {
+      const { frame, captureTs, audioSamples, seq } = frameData;
+      const tInferenceStart = performance.now();
 
       try {
         const res = await fetch(`/ai-api/ai/session/${sessionIdRef.current}/process`, {
@@ -681,137 +825,180 @@ export default function LiveMonitoring() {
             user_id: userId,
             session_type: sessionType,
             video_frame: frame,
-            audio_samples: samples.length ? samples : null,
+            audio_samples: audioSamples,
             timestamp: Date.now() / 1000.0,
             capture_timestamp: captureTs / 1000.0,
           })
         });
 
-        const data = await res.json();
-        if (res.ok && data) {
-          setEngineResult(data);
+        const tInferenceEnd = performance.now();
+        const inferenceLatency = Math.round(tInferenceEnd - tInferenceStart);
 
-          let shouldKickout = false;
-          let kickoutReason = '';
-
-          if (data.decision?.action === 'SUSPEND_SESSION' || (sessionType === 'EXAM' && data.risk?.score > 85)) {
-             shouldKickout = true;
-             kickoutReason = data.decision?.reasons?.[0] || 'High risk threshold reached in strict exam mode. Session suspended.';
-          }
-
-          // Emit alerts + persist ONLY on event state transitions (dedup).
-          let hasNewEvents = false;
-          if (data.behaviour?.events?.length) {
-            data.behaviour.events.forEach(evt => {
-              const evtState = String(evt.state || 'CONFIRMED').toUpperCase();
-              if (emittedEventsRef.current[evt.type] === evtState) return;
-              if (evtState === 'RESOLVED') {
-                delete emittedEventsRef.current[evt.type];
-              } else {
-                emittedEventsRef.current[evt.type] = evtState;
-              }
-              hasNewEvents = true;
-
-              if (evtState !== 'RESOLVED') {
-                const isCritOrHigh = evt.severity === 'CRITICAL' || evt.severity === 'HIGH';
-                addAlert({
-                  id: evt.id || evt.event_id || `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-                  title: evt.type ? evt.type.replace(/_/g, ' ') : 'Violation Detected',
-                  msg: evt.message || evt.evidence || `AI detected ${evt.type}`,
-                  type: isCritOrHigh ? 'danger' : 'warning',
-                  severity: evt.severity || 'HIGH',
-                  confidence: evt.confidence,
-                  duration: evt.duration,
-                  time: Date.now()
-                });
-              }
-
-              // Spoken voice warnings for participant
-              if (evt.type === 'IDENTITY_MISMATCH' || evt.type === 'POSSIBLE_USER_REPLACEMENT') {
-                speakAlert("Warning! Registered candidate face not detected.");
-              } else if (evt.type === 'PHONE_DETECTED' || evt.type === 'MOBILE_PHONE_DETECTED') {
-                speakAlert("Warning! Mobile phone detected in camera view.");
-              } else if ((evt.type === 'MULTIPLE_PERSONS' || evt.type === 'MULTIPLE_PEOPLE_DETECTED') && sessionType === 'EXAM') {
-                speakAlert("Warning! Multiple persons detected in the room.");
-              } else if ((evt.type === 'PROLONGED_DISTRACTION' || evt.type === 'OFFSCREEN_GLANCE') && sessionType === 'EXAM') {
-                speakAlert("Warning! Please focus directly on your screen.");
-              } else if (evt.type === 'EYES_CLOSED' && sessionType === 'EXAM') {
-                speakAlert("Warning! Candidate eyes appear closed.");
-              } else if (evt.type === 'HEAD_TURNED' && sessionType === 'EXAM') {
-                speakAlert("Warning! Please face the camera directly.");
-              } else if (evt.type === 'SPOOF_DETECTED' || evt.type === 'LIVENESS_FAILED') {
-                speakAlert("Warning! Presentation attack detected. Live face required.");
-              } else if (evt.type === 'USER_ABSENT') {
-                speakAlert("Warning! Please stay in the camera view.");
-              } else if (evt.severity === 'CRITICAL') {
-                speakAlert(`Warning! ${evt.type.replace(/_/g, ' ')}`);
-              }
-
-              // Emit through socket to admin/reviewer and proctor room
-              if (socketRef.current?.connected) {
-                const eventPayload = {
-                  id: evt.id || evt.event_id || `evt_${Date.now()}`,
-                  sessionId: sessionIdRef.current,
-                  roomId: roomId || undefined,
-                  eventType: evt.type,
-                  type: evt.type,
-                  category: evt.category || 'BEHAVIOUR',
-                  source: evt.source || 'AI_ENGINE',
-                  severity: evt.severity,
-                  confidence: evt.confidence || 0.9,
-                  evidence: evt.evidence,
-                  message: evt.message || evt.evidence,
-                  description: evt.message || evt.evidence,
-                  state: evt.state || 'CONFIRMED',
-                  duration: evt.duration,
-                  timestamp: new Date().toISOString(),
-                  captureTimestamp: captureTs,
-                };
-                socketRef.current.emit('ai_event', eventPayload);
-                socketRef.current.emit('proctor:event', eventPayload);
-                socketRef.current.emit('proctor_alert', eventPayload);
-              }
-            });
-          }
-
-          // Persist to the backend on new events or periodically
-          if (hasNewEvents) {
-            fetch('/api/ai-engine/log', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('trueview_token')}`
-              },
-              body: JSON.stringify({
-                ...data,
-                session_id: sessionIdRef.current,
-                user_id: userId,
-                session_type: sessionType,
-                roomId: roomId || undefined,
-                roomTitle: roomTitle || undefined
-              })
-            }).catch(() => {});
-          }
-
-          if (shouldKickout) {
-            if ('speechSynthesis' in window) {
-              window.speechSynthesis.cancel();
-              const utterance = new SpeechSynthesisUtterance("Session terminated due to high risk score and rule violations.");
-              utterance.volume = 1.0;
-              window.speechSynthesis.speak(utterance);
-            }
-            setTerminationReason(kickoutReason);
-            await stopMonitoringDueToKickout();
-          }
+        // Requirement 12: Ignore out-of-order results
+        if (seq < latestProcessedSeqRef.current) {
+          return;
         }
+        latestProcessedSeqRef.current = seq;
+
+        const data = await res.json();
+        if (!res.ok || !data) return;
+
+        const tUiStart = performance.now();
+
+        // 1. FAST ALERT REFLECTION (Requirement 9): Immediate UI Update + Immediate Socket.IO Dispatch
+        let hasNewEvents = false;
+        if (data.behaviour?.events?.length) {
+          data.behaviour.events.forEach(evt => {
+            const evtState = String(evt.state || 'CONFIRMED').toUpperCase();
+
+            // In MODERATE mode: ignore internal observations or events in cooldown
+            if (evt.should_alert === false || evt.in_cooldown === true) return;
+            if (evtState === 'OBSERVING' || evtState === 'COOLDOWN') return;
+
+            if (emittedEventsRef.current[evt.type] === evtState) return;
+            if (evtState === 'RESOLVED') {
+              delete emittedEventsRef.current[evt.type];
+            } else {
+              emittedEventsRef.current[evt.type] = evtState;
+            }
+            hasNewEvents = true;
+
+            // Immediate candidate alert list update
+            if (evtState !== 'RESOLVED') {
+              const isCritOrHigh = evt.severity === 'CRITICAL' || evt.severity === 'HIGH';
+              addAlert({
+                id: evt.id || evt.event_id || `${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                title: evt.type ? evt.type.replace(/_/g, ' ') : 'Violation Detected',
+                msg: evt.message || evt.evidence || `AI detected ${evt.type}`,
+                type: isCritOrHigh ? 'danger' : 'warning',
+                severity: evt.severity || 'MEDIUM',
+                confidence: evt.confidence,
+                duration: evt.duration,
+                time: Date.now()
+              });
+            }
+
+            // Spoken voice warnings for participant
+            if (evt.type === 'IDENTITY_MISMATCH' || evt.type === 'POSSIBLE_USER_REPLACEMENT') {
+              speakAlert("Warning! Registered candidate face not detected.");
+            } else if (evt.type === 'PHONE_DETECTED' || evt.type === 'MOBILE_PHONE_DETECTED') {
+              speakAlert("Warning! Mobile phone detected in camera view.");
+            } else if ((evt.type === 'MULTIPLE_PERSONS' || evt.type === 'MULTIPLE_PEOPLE_DETECTED') && sessionType === 'EXAM') {
+              speakAlert("Warning! Multiple persons detected in the room.");
+            } else if ((evt.type === 'PROLONGED_DISTRACTION' || evt.type === 'OFFSCREEN_GLANCE') && sessionType === 'EXAM') {
+              speakAlert("Warning! Please focus directly on your screen.");
+            } else if (evt.type === 'EYES_CLOSED' && sessionType === 'EXAM') {
+              speakAlert("Warning! Candidate eyes appear closed.");
+            } else if (evt.type === 'HEAD_TURNED' && sessionType === 'EXAM') {
+              speakAlert("Warning! Please face the camera directly.");
+            } else if (evt.type === 'SPOOF_DETECTED' || evt.type === 'LIVENESS_FAILED') {
+              speakAlert("Warning! Presentation attack detected. Live face required.");
+            } else if (evt.type === 'USER_ABSENT') {
+              speakAlert("Warning! Please stay in the camera view.");
+            } else if (evt.severity === 'CRITICAL') {
+              speakAlert(`Warning! ${evt.type.replace(/_/g, ' ')}`);
+            }
+
+            // Immediate Socket.IO dispatch to Proctor Dashboard
+            if (socketRef.current?.connected) {
+              const eventPayload = {
+                id: evt.id || evt.event_id || `evt_${Date.now()}`,
+                sessionId: sessionIdRef.current,
+                roomId: roomId || undefined,
+                eventType: evt.type,
+                type: evt.type,
+                category: evt.category || 'BEHAVIOUR',
+                source: evt.source || 'AI_ENGINE',
+                severity: evt.severity,
+                confidence: evt.confidence || 0.9,
+                evidence: evt.evidence,
+                message: evt.message || evt.evidence,
+                description: evt.message || evt.evidence,
+                state: evt.state || 'CONFIRMED',
+                should_alert: evt.should_alert,
+                in_cooldown: evt.in_cooldown,
+                duration: evt.duration,
+                timestamp: new Date().toISOString(),
+                captureTimestamp: captureTs,
+                endToEndLatencyMs: Math.round(performance.now() - captureTs),
+              };
+              socketRef.current.emit('ai_event', eventPayload);
+              socketRef.current.emit('AI_EVENT', eventPayload);
+              socketRef.current.emit('ALERT_CREATED', eventPayload);
+              socketRef.current.emit('proctor:event', eventPayload);
+              socketRef.current.emit('proctor_alert', eventPayload);
+            }
+          });
+        }
+
+        // 2. Throttled Socket.IO telemetry for continuous score updates (Requirement 7)
+        const nowMs = Date.now();
+        if (socketRef.current?.connected && (nowMs - lastSocketTelemetryEmitRef.current >= 200)) {
+          lastSocketTelemetryEmitRef.current = nowMs;
+          socketRef.current.emit('telemetry_update', {
+            sessionId: sessionIdRef.current,
+            roomId: roomId || undefined,
+            riskScore: Math.round(data.risk?.score ?? data.risk?.current ?? 0),
+            attentionScore: Math.round(data.attention?.score ?? 90),
+            liveness: data.liveness?.status,
+            identity: data.identity?.status,
+            timestamp: nowMs,
+          });
+        }
+
+        // 3. Immediate State Update
+        setEngineResult(data);
+
+        // 4. Session Suspension Evaluation
+        if (data.decision?.action === 'SUSPEND_SESSION' || (sessionType === 'EXAM' && data.risk?.score > 85)) {
+          const kickoutReason = data.decision?.reasons?.[0] || 'High risk threshold reached in strict exam mode. Session suspended.';
+          if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance("Session terminated due to high risk score and rule violations.");
+            utterance.volume = 1.0;
+            window.speechSynthesis.speak(utterance);
+          }
+          setTerminationReason(kickoutReason);
+          await stopMonitoringDueToKickout();
+        }
+
+        // 5. Asynchronous Background Logging (Non-blocking fire-and-forget)
+        if (hasNewEvents) {
+          fetch('/api/ai-engine/log', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${localStorage.getItem('trueview_token')}`
+            },
+            body: JSON.stringify({
+              ...data,
+              session_id: sessionIdRef.current,
+              user_id: userId,
+              session_type: sessionType,
+              roomId: roomId || undefined,
+              roomTitle: roomTitle || undefined
+            })
+          }).catch(() => {});
+        }
+
+        const tUiEnd = performance.now();
+        const uiLatency = Math.round(tUiEnd - tUiStart);
+        const decisionLatency = data.performance?.latency_breakdown?.decision || 0;
+        const endToEndLatency = Math.round(performance.now() - captureTs);
+
+        // 6. Record Timing Metrics for Performance Indicator
+        recordTimingMetric({
+          inferenceLatency,
+          decisionLatency,
+          uiLatency,
+          endToEndLatency,
+        });
+
       } catch (_) {}
-      finally {
-        aiInFlightRef.current = false;
-        scheduleNext();
-      }
     };
 
-    scheduleNext(100);
+    // Start frame sampler
+    startFrameSampler();
   };
 
   const isMountedRef = useRef(true);
@@ -906,13 +1093,30 @@ export default function LiveMonitoring() {
               </div>
               <h2 className="text-2xl font-bold text-white mb-2">Session Terminated</h2>
               <p className="text-gray-300 text-sm font-normal leading-relaxed">
-                {terminationReason || 'Maximum tab-switch limit exceeded.'}
+                {isTabTerminated ? 'Maximum tab-switch limit exceeded.' : (terminationReason || 'Session terminated due to security policy.')}
               </p>
               <div className="mt-3 p-3 rounded-xl bg-black/40 border border-white/10 text-xs font-mono text-zinc-300">
-                Tab Switches: <strong className="text-rose-400 font-bold">{Math.max(tabSwitchCount, 4)} / {maxTabSwitches}</strong> (Exceeded)
+                Tab Switches:{' '}
+                {isTabTerminated || tabSwitchCount >= maxTabSwitches ? (
+                  <strong className="text-rose-400 font-bold">{tabSwitchCount} / {maxTabSwitches} (Exceeded)</strong>
+                ) : (
+                  <strong className="text-emerald-400 font-bold">{tabSwitchCount} / {maxTabSwitches} (Normal)</strong>
+                )}
               </div>
             </div>
             <div className="flex flex-col sm:flex-row items-center gap-3">
+              <button 
+                onClick={async () => {
+                  if (resetTabSwitches) await resetTabSwitches();
+                  setTerminationReason(null);
+                  isSessionTerminatedRef.current = false;
+                  startMeeting();
+                }}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5 px-4 rounded-xl transition-colors cursor-pointer text-xs flex items-center justify-center gap-1.5"
+              >
+                <RefreshCw size={13} />
+                Reset & Resume Session
+              </button>
               <button 
                 onClick={() => navigate('/sessions')}
                 className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-xl transition-colors cursor-pointer text-xs"
@@ -984,19 +1188,96 @@ export default function LiveMonitoring() {
             compact={true}
           />
 
-          <div className="flex items-center gap-2 px-3 py-1 bg-black/40 rounded-lg border border-white/5">
-            <span className="text-zinc-400">STATUS:</span>
-            <span className="text-emerald-400 font-bold flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+          <div className="flex items-center gap-3 px-3 py-1 bg-black/40 rounded-lg border border-white/5">
+            <span className="text-emerald-400 font-bold flex items-center gap-1.5 text-xs">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               MONITORING
             </span>
+            <span className="text-zinc-600">|</span>
+            <div className="flex items-center gap-1 text-xs">
+              <span className="text-zinc-400">Mode:</span>
+              <span className="text-sky-400 font-mono font-bold">MODERATE</span>
+            </div>
+            <span className="text-zinc-600">|</span>
+            <div className="flex items-center gap-1 text-xs">
+              <span className="text-zinc-400">Risk:</span>
+              <span className={`font-mono font-bold ${riskScoreVal > 60 ? 'text-rose-400' : riskScoreVal > 30 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                {riskScoreVal} / 100
+              </span>
+            </div>
           </div>
 
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1 bg-black/40 rounded-lg border border-white/5">
-            <span className="text-zinc-400">AI STATUS:</span>
-            <span className="text-white font-bold flex items-center gap-1">
-              <CheckCircle2 size={12} className="text-emerald-400" /> Operational
-            </span>
+          {/* Small Developer / Pipeline Performance Indicator (Requirement 14) */}
+          <div className="relative">
+            <button
+              onClick={() => setShowPerfDetails(prev => !prev)}
+              className="hidden sm:flex items-center gap-2 px-3 py-1 bg-black/40 hover:bg-black/60 rounded-lg border border-white/10 text-xs font-mono transition-all cursor-pointer"
+              title="Click to view real-time latency & FPS breakdown"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <span className="text-zinc-400">AI:</span>
+              <span className="font-bold text-white">{pipelineMetrics.aiFps || 10} FPS</span>
+              <span className="text-zinc-600">|</span>
+              <span className="text-sky-300 font-bold">{pipelineMetrics.inferenceLatency || 75}ms</span>
+              <span className="text-zinc-600">|</span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                pipelineMetrics.health === 'HEALTHY' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'
+              }`}>
+                {pipelineMetrics.health}
+              </span>
+            </button>
+
+            {/* Expandable Detailed Performance Flyout */}
+            {showPerfDetails && (
+              <div className="absolute right-0 top-10 mt-1 w-72 bg-zinc-900/95 backdrop-blur-md border border-white/15 rounded-xl shadow-2xl p-3 z-50 text-xs space-y-2 font-mono">
+                <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
+                  <span className="font-bold text-white text-[11px] flex items-center gap-1.5">
+                    <Activity size={13} className="text-emerald-400" />
+                    PIPELINE TELEMETRY
+                  </span>
+                  <button 
+                    onClick={() => setShowPerfDetails(false)}
+                    className="text-zinc-400 hover:text-white px-1 cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="space-y-1 text-[11px]">
+                  <div className="flex justify-between">
+                    <span className="text-zinc-400">Camera Native:</span>
+                    <span className="text-white font-bold">{pipelineMetrics.cameraFps} FPS</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-400">AI Inference:</span>
+                    <span className="text-emerald-400 font-bold">{pipelineMetrics.aiFps} FPS</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-400">Inference Latency:</span>
+                    <span className="text-sky-300 font-bold">{pipelineMetrics.inferenceLatency} ms</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-400">P95 Latency:</span>
+                    <span className="text-sky-400">{pipelineMetrics.p95Latency} ms</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-400">Decision Engine:</span>
+                    <span className="text-purple-300">{pipelineMetrics.decisionLatency} ms</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-400">UI State Update:</span>
+                    <span className="text-amber-300">{pipelineMetrics.uiLatency} ms</span>
+                  </div>
+                  <div className="flex justify-between border-t border-white/10 pt-1">
+                    <span className="text-zinc-300 font-bold">End-to-End:</span>
+                    <span className="text-emerald-300 font-bold">{pipelineMetrics.endToEndLatency} ms</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-400">Frame Backlog:</span>
+                    <span className="text-emerald-400 font-bold">0 (Latest-Frame)</span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2 px-3 py-1 bg-black/40 rounded-lg border border-white/5 font-mono">
@@ -1102,10 +1383,17 @@ export default function LiveMonitoring() {
 
             {/* Risk and Violation Overlays */}
             <div className="absolute top-4 right-4 flex flex-col items-end gap-2 z-20">
-              <div className="bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2 text-xs text-white">
-                <Shield size={12} className={riskScoreVal > 50 ? "text-rose-400" : "text-emerald-400"} />
-                Risk: <span className={`font-bold ${riskScoreVal > 50 ? 'text-rose-400' : riskScoreVal > 20 ? 'text-amber-400' : 'text-emerald-400'}`}>{riskScoreVal}/100</span>
-                <span className="text-[10px] text-zinc-400">({engineResult?.risk?.level || 'NORMAL'})</span>
+              <div className="bg-black/75 backdrop-blur-md px-3 py-2 rounded-xl border border-white/10 flex flex-col gap-1 text-xs text-white shadow-lg min-w-[130px]">
+                <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-1">
+                  <span className="text-[10px] text-zinc-400 font-mono uppercase tracking-wider">MONITORING</span>
+                  <span className="text-[10px] font-bold text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20">MODERATE</span>
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-0.5">
+                  <span className="text-[11px] text-zinc-300">Risk:</span>
+                  <span className={`font-bold font-mono ${riskScoreVal > 60 ? 'text-rose-400' : riskScoreVal > 30 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                    {riskScoreVal} / 100
+                  </span>
+                </div>
               </div>
 
               {engineResult?.environment?.phone_detected && (

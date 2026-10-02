@@ -90,6 +90,8 @@ const reportSchema = new mongoose.Schema(
     tabSwitchTimeline: [
       {
         timestamp: { type: Date, default: Date.now },
+        episodeId: { type: String, default: null },
+        hiddenDuration: { type: Number, default: null },
         count: { type: Number, default: 0 },
         severity: { type: String, default: 'MEDIUM' },
         message: { type: String, default: '' },

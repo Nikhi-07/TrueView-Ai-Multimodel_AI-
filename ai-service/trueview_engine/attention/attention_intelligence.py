@@ -31,10 +31,13 @@ class AttentionIntelligenceEngine:
         face_detected: bool,
         quality_eval: Dict[str, Any],
         looking_away_duration: float,
-        session_type: str = "EXAM"
+        session_type: str = "EXAM",
+        gaze_confidence: float = 0.85,
+        monitoring_profile: str = "MODERATE"
     ) -> Dict[str, Any]:
         """
-        Produce comprehensive attention status payload.
+        Produce comprehensive attention status payload with confidence gating
+        and profile-aware temporal persistence.
         """
         if session_id not in self._session_distractions:
             self._session_distractions[session_id] = {
@@ -54,52 +57,78 @@ class AttentionIntelligenceEngine:
                 "note": "Attention measurement uncertain due to uncalibrated pose or low visibility."
             }
 
-        # Check calibrated pose deltas (yaw > 16.0 or pitch > 14.0)
+        normalized_gaze = str(gaze_dir or "center").strip().lower()
+
+        # Confidence gating:
+        # Gaze confidence < 70% is ignored / kept internal
+        if gaze_confidence < 0.70 and normalized_gaze not in ("center", "straight"):
+            return {
+                "status": "FOCUSED",
+                "score": 90.0,
+                "gaze": gaze_dir,
+                "head_pose": pose_dir,
+                "distraction_duration_sec": 0.0,
+                "distraction_frequency": dist_tracker["distraction_count"],
+                "note": "Low gaze confidence (<70%): ignored to prevent false positives."
+            }
+
+        # Check calibrated pose deltas
         raw_pitch = calibrated_pose_deltas.get("delta_pitch", 0.0)
         pitch_delta = abs(raw_pitch)
         yaw_delta = abs(calibrated_pose_deltas.get("delta_yaw", 0.0))
 
-        is_gaze_away = (gaze_dir not in ("center", "straight"))
-        is_pose_deviated = (yaw_delta > 16.0 or pitch_delta > 14.0 or pose_dir != "Looking Straight")
+        # Profile-aware thresholds:
+        prof_upper = str(monitoring_profile or "MODERATE").upper()
+        if prof_upper == "STRICT":
+            yaw_thresh = 25.0
+            pitch_thresh = 20.0
+            required_distraction_sec = 1.5
+            min_alert_conf = 0.75
+        elif prof_upper == "RELAXED":
+            yaw_thresh = 42.0
+            pitch_thresh = 35.0
+            required_distraction_sec = 5.0
+            min_alert_conf = 0.88
+        else:  # MODERATE (Default for EXAM)
+            yaw_thresh = 35.0
+            pitch_thresh = 28.0
+            required_distraction_sec = 3.0
+            min_alert_conf = 0.85
 
-        # Keyboard Typing Check: candidate looking down at keyboard with head centered.
-        # This exemption exists so CLASS / MEETING / WORKPLACE sessions don't false-
-        # alarm on legitimate typing. It is NOT applied in EXAM mode: looking down at
-        # the desk/lap is exactly the signal proctors must see (hidden phone, notes),
-        # so EXAM treats a downward glance as an OFFSCREEN_GLANCE like any other
-        # distraction. The 2-frame + temporal confirmation window still filters noise.
-        is_downward_keyboard_glance = (
-            session_type.upper() != "EXAM"
-            and (gaze_dir in ("down", "bottom") or raw_pitch < -6.0)
-            and yaw_delta < 15.0  # Head is NOT turned sideways left/right
-            and looking_away_duration <= 2.5  # Brief keyboard typing glance
+        # Normal natural candidate glances: center, slight left/right/down, keyboard, question paper, hands
+        is_natural_glance = normalized_gaze in (
+            "center", "straight", "slight_left", "slight_right", "slight_down", "down",
+            "bottom", "keyboard", "hands", "question_paper", "paper", "desk", "writing"
         )
+        is_clear_offscreen = normalized_gaze in ("left", "right", "up", "offscreen")
+        is_pose_deviated = (yaw_delta > yaw_thresh or pitch_delta > pitch_thresh)
 
-        if is_downward_keyboard_glance:
-            dist_tracker["was_distracted"] = False
-            status = "LOOKING_AT_KEYBOARD"
-            score = 92.0
-            dur = 0.0
-        elif is_gaze_away or is_pose_deviated:
-            if not dist_tracker["was_distracted"]:
-                dist_tracker["distraction_count"] += 1
-                dist_tracker["was_distracted"] = True
+        # Distraction condition active
+        is_diverted = (is_clear_offscreen or is_pose_deviated or (not is_natural_glance))
 
-            dur = looking_away_duration
-            if dur >= 2.5:
-                status = "PROLONGED_DISTRACTION"
-                score = 30.0
-            elif dist_tracker["distraction_count"] >= 3 or dur >= 1.0:
-                status = "REPEATED_DISTRACTION"
-                score = 45.0
-            else:
-                status = "OFFSCREEN_GLANCE"
-                score = 60.0
-        else:
+        if not is_diverted:
             dist_tracker["was_distracted"] = False
             status = "FOCUSED"
             score = 95.0
             dur = 0.0
+        else:
+            # Condition is diverted: check temporal persistence
+            dur = looking_away_duration
+
+            # Confidence check for confirmed alert:
+            conf_ok = (gaze_confidence >= min_alert_conf)
+
+            if dur >= required_distraction_sec and conf_ok:
+                if not dist_tracker["was_distracted"]:
+                    dist_tracker["distraction_count"] += 1
+                    dist_tracker["was_distracted"] = True
+                status = "PROLONGED_DISTRACTION"
+                score = 35.0
+            else:
+                # Brief look away (< required seconds) or short offscreen:
+                # Normal natural behavior, do not treat as confirmed distraction!
+                status = "BRIEF_NATURAL_DISTRACTION"
+                score = 85.0
 
         return {
             "status": status,

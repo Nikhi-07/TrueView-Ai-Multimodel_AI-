@@ -81,10 +81,9 @@ class FocusState:
 EYE_CLOSED_THRESHOLD               = 0.21   # averageEAR <= 0.21 indicates eye closure
 EYE_OPEN_THRESHOLD                 = 0.25   # averageEAR >= 0.25 indicates fully open
 BLINK_MAX_DURATION_SECONDS         = 0.40   # Closures <= 0.40s (400ms) treated as natural blink
-BLINK_MAX_DURATION_MS              = 400
-PROLONGED_CLOSURE_SECONDS          = 0.85   # Closures > 0.85s treated as inattention
-EYES_CLOSED_ALERT_DURATION_SECONDS = 1.00   # Closures >= 1.0s trigger inattention alert
-EYES_CLOSED_ALERT_DURATION_MS      = 1000
+PROLONGED_CLOSURE_SECONDS          = 1.50   # Closures > 1.5s monitored internally
+EYES_CLOSED_ALERT_DURATION_SECONDS = 2.50   # Sustained closures >= 2.5s trigger moderate inattention alert
+EYES_CLOSED_ALERT_DURATION_MS      = 2500
 MIN_FACE_CONFIDENCE                = 0.50   # Below this, face is considered UNKNOWN
 
 # ──────────────────────────────────────────────

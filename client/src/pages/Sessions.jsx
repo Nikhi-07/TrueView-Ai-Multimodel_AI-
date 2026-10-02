@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Clock, Calendar, Video, AlertTriangle, Search, RefreshCw, 
   Shield, CheckCircle2, User, Eye, FileText, Filter
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import PageHeader from '../components/Cards/PageHeader';
 import api from '../services/api';
 import SessionDetailModal from '../components/Modals/SessionDetailModal';
@@ -26,11 +27,8 @@ export default function Sessions() {
   const [selectedReportId, setSelectedReportId] = useState(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
 
-  useEffect(() => {
-    fetchSessions();
-  }, []);
-
-  const fetchSessions = async () => {
+  // Declare fetchSessions BEFORE useEffect hooks that reference it
+  const fetchSessions = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api.get('/ai-engine/sessions');
@@ -85,7 +83,26 @@ export default function Sessions() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchSessions();
+  }, [fetchSessions]);
+
+  // Real-time Socket.IO listener — auto-refreshes when extension starts/stops sessions
+  useEffect(() => {
+    const token = localStorage.getItem('trueview_token');
+    const socket = io({
+      path: '/socket.io',
+      transports: ['polling', 'websocket'],
+      auth: { token: token || undefined }
+    });
+    const refresh = () => fetchSessions();
+    socket.on('SESSION_STARTED', refresh);
+    socket.on('SESSION_COMPLETED', refresh);
+    socket.on('SESSION_TERMINATED', refresh);
+    return () => { try { socket.disconnect(); } catch (_) {} };
+  }, [fetchSessions]);
 
   // Client-side search and filtering without page reloads
   const filteredSessions = useMemo(() => {

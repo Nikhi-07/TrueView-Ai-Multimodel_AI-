@@ -117,6 +117,9 @@ const logUnifiedEvent = async (req, res, next) => {
     if (behaviour?.events && Array.isArray(behaviour.events)) {
       for (const evt of behaviour.events) {
         const evtObj = typeof evt === 'string' ? { type: evt, eventType: evt, severity: evt.includes('PHONE') || evt.includes('SPOOF') ? 'HIGH' : 'MEDIUM', evidence: evt.replace(/_/g, ' ') } : evt;
+        if (evtObj.should_alert === false || evtObj.in_cooldown === true || evtObj.state === 'COOLDOWN' || evtObj.state === 'OBSERVING') {
+          continue;
+        }
         const eventType = evtObj.type || evtObj.eventType || 'VIOLATION';
         // Canonical severity vocabulary (matches the Proctor Room socket alerts
         // and the Report model): CRITICAL | HIGH | MEDIUM | LOW | INFO.
@@ -791,6 +794,68 @@ const uploadSessionRecording = async (req, res, next) => {
 // @desc    End session, calculate final score, and generate report
 // @route   POST /api/ai-engine/sessions/:sessionId/end
 // @access  Private / Public
+// @desc    Register/start a new monitoring session (called by extension when monitoring begins)
+// @route   POST /api/ai-engine/sessions/:sessionId/start
+// @access  Private / Public
+const startSession = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const { roomId, roomTitle, mode, sessionType, source } = req.body || {};
+    const userId = req.user ? String(req.user._id || req.user.id) : (req.body?.userId || 'extension_candidate');
+    const userName = req.user?.fullName || req.user?.name || req.body?.userName || 'Student Candidate';
+    const userEmail = req.user?.email || req.body?.userEmail || 'student@trueview.ai';
+    const effectiveMode = (mode || sessionType || 'EXAM').toUpperCase();
+
+    // Upsert: find or create the session document
+    let session = await Session.findOne({ sessionId });
+    if (!session) {
+      session = await Session.create({
+        sessionId,
+        userId,
+        userName,
+        userEmail,
+        mode: effectiveMode,
+        sessionType: effectiveMode,
+        roomId: roomId || null,
+        roomTitle: roomTitle || null,
+        status: 'ACTIVE',
+        startTime: new Date(),
+        source: source || 'EXTENSION',
+      });
+    } else {
+      // Update metadata if session already existed (e.g. from logUnifiedEvent)
+      if (!session.userId && userId) session.userId = userId;
+      if (!session.userName || session.userName === 'Student Candidate') session.userName = userName;
+      if (!session.userEmail || session.userEmail === 'student@trueview.ai') session.userEmail = userEmail;
+      if (!session.roomId && roomId) session.roomId = roomId;
+      if (!session.roomTitle && roomTitle) session.roomTitle = roomTitle;
+      if (session.status !== 'ACTIVE') session.status = 'ACTIVE';
+      if (!session.startTime) session.startTime = new Date();
+      await session.save();
+    }
+
+    // Notify Socket.IO so live dashboards update
+    const io = req.app.get('io');
+    if (io) {
+      const payload = { sessionId, userId, userEmail, roomId: session.roomId, status: 'ACTIVE', source: source || 'EXTENSION', timestamp: new Date().toISOString() };
+      io.emit('SESSION_STARTED', payload);
+      if (session.roomId) {
+        io.to(`room_${session.roomId}`).emit('SESSION_STARTED', payload);
+        io.to(`proctor:${session.roomId}`).emit('SESSION_STARTED', payload);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: 'Session started and registered.',
+      sessionId,
+      session,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const endSession = async (req, res, next) => {
   try {
     const { sessionId } = req.params;
@@ -903,6 +968,33 @@ const endSession = async (req, res, next) => {
       await report.save();
     }
 
+    // === Socket.IO Broadcasts so Reports.jsx & Sessions.jsx auto-refresh ===
+    try {
+      const io = req.app.get('io');
+      if (io) {
+        const completedPayload = {
+          sessionId,
+          roomId: effectiveRoomId,
+          reportId: report.reportId,
+          integrityScore: score,
+          status,
+          userName: session.userName,
+          userEmail: session.userEmail,
+          timestamp: new Date().toISOString(),
+        };
+        // Broadcast globally so any connected client (proctor, candidate) updates
+        io.emit('SESSION_COMPLETED', completedPayload);
+        io.emit('REPORT_CREATED', completedPayload);
+        if (effectiveRoomId) {
+          io.to(`room_${effectiveRoomId}`).emit('SESSION_COMPLETED', completedPayload);
+          io.to(`proctor:${effectiveRoomId}`).emit('REPORT_CREATED', completedPayload);
+        }
+        if (session.userId) {
+          io.to(`user:${session.userId}`).emit('REPORT_CREATED', completedPayload);
+        }
+      }
+    } catch (_) {}
+
     res.json({
       success: true,
       message: 'Session completed successfully',
@@ -920,7 +1012,7 @@ const endSession = async (req, res, next) => {
 const recordTabSwitch = async (req, res, next) => {
   try {
     const { sessionId } = req.params;
-    const { roomId: reqRoomId } = req.body || {};
+    const { roomId: reqRoomId, episodeId, hiddenDuration } = req.body || {};
 
     let session = await Session.findOne({ sessionId });
     if (!session) {
@@ -931,6 +1023,37 @@ const recordTabSwitch = async (req, res, next) => {
     }
 
     const maxAllowed = session.maxTabSwitches || 3;
+
+    // Deduplication check: if this episode was already recorded, return current state idempotently
+    if (episodeId && session.tabSwitchEvents && session.tabSwitchEvents.some(e => e.episodeId === episodeId)) {
+      return res.json({
+        success: true,
+        sessionId,
+        count: session.tabSwitchCount || 0,
+        maxAllowed,
+        tabSwitchStatus: session.tabSwitchStatus || 'NORMAL',
+        terminated: session.status === 'TERMINATED' || (session.tabSwitchCount || 0) >= 4,
+        deduplicated: true,
+        message: 'Episode already processed.',
+      });
+    }
+
+    // Debounce duplicate request with the exact same episode ID
+    if (episodeId && session.tabSwitchEvents && session.tabSwitchEvents.length > 0) {
+      const lastEvt = session.tabSwitchEvents[session.tabSwitchEvents.length - 1];
+      if (lastEvt.episodeId === episodeId) {
+        return res.json({
+          success: true,
+          sessionId,
+          count: session.tabSwitchCount || 0,
+          maxAllowed,
+          tabSwitchStatus: session.tabSwitchStatus || 'NORMAL',
+          terminated: session.status === 'TERMINATED' || (session.tabSwitchCount || 0) >= 4,
+          deduplicated: true,
+          message: 'Debounced duplicate request for episode.',
+        });
+      }
+    }
 
     // If session is already terminated, return current state
     if (session.status === 'TERMINATED') {
@@ -984,6 +1107,8 @@ const recordTabSwitch = async (req, res, next) => {
     if (!session.tabSwitchEvents) session.tabSwitchEvents = [];
     const eventRecord = {
       timestamp: new Date(),
+      episodeId: episodeId || `ep_${Date.now()}`,
+      hiddenDuration: hiddenDuration || null,
       count: newCount,
       maxAllowed,
       severity,
@@ -1206,6 +1331,112 @@ const recordTabSwitch = async (req, res, next) => {
   }
 };
 
+// @desc    Authoritatively reset tab switch counters and restore session from false termination
+// @route   POST /api/ai-engine/sessions/:sessionId/reset-tab-switches
+// @access  Public / Private
+const resetTabSwitches = async (req, res, next) => {
+  try {
+    const { sessionId } = req.params;
+    const { roomId: reqRoomId } = req.body || {};
+
+    let session = await Session.findOne({ sessionId });
+    if (!session) {
+      session = await Session.findOne({ sessionId: { $regex: `^${sessionId}$`, $options: 'i' } });
+    }
+    if (!session) {
+      return res.status(404).json({ success: false, message: 'Session not found' });
+    }
+
+    const maxAllowed = session.maxTabSwitches || 3;
+    session.tabSwitchCount = 0;
+    session.tabSwitchStatus = 'NORMAL';
+    session.tabSwitchEvents = [];
+
+    // If session was terminated specifically due to tab switches, restore to ACTIVE
+    if (session.status === 'TERMINATED' && (
+      !session.terminationReason ||
+      session.terminationReason.toLowerCase().includes('tab-switch') ||
+      session.terminationReason.toLowerCase().includes('tab switch')
+    )) {
+      session.status = 'ACTIVE';
+      session.terminationReason = null;
+      session.terminatedAt = null;
+    }
+
+    await session.save();
+
+    // Also update Room participant if present
+    const effectiveRoomId = session.roomId || reqRoomId;
+    let roomOwnerId = null;
+    if (effectiveRoomId) {
+      try {
+        const roomDoc = await Room.findOne({
+          $or: [
+            { roomId: effectiveRoomId.toUpperCase() },
+            { joinCode: effectiveRoomId.toUpperCase() }
+          ]
+        });
+        if (roomDoc) {
+          roomOwnerId = roomDoc.ownerId || roomDoc.createdBy || roomDoc.hostUserId || roomDoc.host?.id;
+          if (roomDoc.participants) {
+            const pIdx = roomDoc.participants.findIndex(p => p.sessionId === sessionId || p.id === session.userId || p.email === session.userEmail);
+            if (pIdx >= 0) {
+              roomDoc.participants[pIdx].tabSwitchCount = 0;
+              roomDoc.participants[pIdx].tabSwitchStatus = 'NORMAL';
+              if (roomDoc.participants[pIdx].status === 'TERMINATED' && roomDoc.participants[pIdx].terminationReason?.includes('TAB SWITCH')) {
+                roomDoc.participants[pIdx].status = 'ACTIVE';
+                roomDoc.participants[pIdx].terminationReason = null;
+                roomDoc.participants[pIdx].riskLevel = 'LOW';
+                roomDoc.participants[pIdx].riskScore = 15;
+              }
+              await roomDoc.save();
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Socket.io broadcast of reset
+    const io = req.app.get('io');
+    if (io) {
+      const payload = {
+        type: 'TAB_SWITCH_RESET',
+        eventType: 'TAB_SWITCH_RESET',
+        sessionId,
+        roomId: effectiveRoomId,
+        count: 0,
+        tabSwitchCount: 0,
+        tabSwitchStatus: 'NORMAL',
+        maxAllowed,
+        terminated: false,
+        timestamp: new Date().toISOString()
+      };
+      io.to(`room_${sessionId}`).emit('TAB_SWITCH_RESET', payload);
+      io.to(`session:${sessionId}`).emit('TAB_SWITCH_RESET', payload);
+      if (effectiveRoomId) {
+        io.to(`proctor:${effectiveRoomId}`).emit('TAB_SWITCH_RESET', payload);
+        io.to(`room_${effectiveRoomId}`).emit('TAB_SWITCH_RESET', payload);
+        if (roomOwnerId) {
+          io.to(`user:${roomOwnerId}`).emit('TAB_SWITCH_RESET', payload);
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      sessionId,
+      count: 0,
+      maxAllowed,
+      tabSwitchStatus: 'NORMAL',
+      terminated: false,
+      message: 'Tab switch count reset to 0/3 successfully.'
+    });
+  } catch (err) {
+    console.error('[unifiedController] resetTabSwitches error:', err);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
 module.exports = {
   logUnifiedEvent,
   getDashboardStats,
@@ -1213,6 +1444,8 @@ module.exports = {
   getSessions,
   getSessionById,
   uploadSessionRecording,
+  startSession,
   endSession,
   recordTabSwitch,
+  resetTabSwitches,
 };

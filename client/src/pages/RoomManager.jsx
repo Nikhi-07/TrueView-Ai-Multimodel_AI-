@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { io } from 'socket.io-client';
 import { 
   Video, Users, Plus, Shield, Square, AlertTriangle, Volume2, Copy, Search, 
   RefreshCw, PhoneOff, FileText, Share2, Check, ExternalLink, Sparkles, Clock, Calendar, ArrowRight
@@ -11,7 +12,7 @@ import StatusBadge from '../components/Cards/StatusBadge';
 import api from '../services/api';
 
 const MODES = [
-  { id: 'EXAM', label: 'Examination (Strict)', badge: 'danger' },
+  { id: 'EXAM', label: 'Examination (Moderate)', badge: 'primary' },
   { id: 'INTERVIEW', label: 'Interview (Conversational)', badge: 'primary' },
   { id: 'ONLINE_CLASS', label: 'Online Class (Lecture)', badge: 'accent' },
   { id: 'MEETING', label: 'Meeting (Collaborative)', badge: 'success' },
@@ -43,7 +44,111 @@ export default function RoomManager() {
 
   useEffect(() => {
     fetchRooms();
-  }, []);
+
+    const token = localStorage.getItem('trueview_token');
+    const socket = io({
+      path: '/socket.io',
+      transports: ['polling', 'websocket'],
+      auth: { token: token || undefined },
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+    });
+
+    const currentUserId = user ? String(user._id || user.id) : null;
+    socket.on('connect', () => {
+      if (currentUserId) {
+        socket.emit('subscribe_user_dashboard', { userId: currentUserId });
+      }
+    });
+
+    socket.on('ROOM_CREATED', (data) => {
+      if (data?.room) {
+        setRooms((prev) => {
+          const rId = data.room.roomId || data.room.id;
+          if (prev.some((r) => (r.roomId || r.id) === rId)) return prev;
+          return [data.room, ...prev];
+        });
+      }
+    });
+
+    const handleParticipantsUpdated = (data) => {
+      if (!data?.roomId) return;
+      setRooms((prev) =>
+        prev.map((r) => {
+          if ((r.roomId || r.id)?.toUpperCase() === data.roomId.toUpperCase()) {
+            return {
+              ...r,
+              participantsCount: data.participantsCount !== undefined ? data.participantsCount : (data.students !== undefined ? data.students : r.participantsCount),
+              students: data.students !== undefined ? data.students : (data.participantsCount !== undefined ? data.participantsCount : r.students),
+              activeStudents: data.activeStudents !== undefined ? data.activeStudents : r.activeStudents,
+              participants: data.participants || r.participants,
+            };
+          }
+          return r;
+        })
+      );
+    };
+
+    const handleParticipantJoined = (data) => {
+      if (!data?.roomId) return;
+      setRooms((prev) =>
+        prev.map((r) => {
+          if ((r.roomId || r.id)?.toUpperCase() === data.roomId.toUpperCase()) {
+            const nextCount = data.students !== undefined ? data.students : (data.participantsCount !== undefined ? data.participantsCount : ((r.participantsCount || 0) + 1));
+            return {
+              ...r,
+              status: r.status === 'CREATED' ? 'LIVE' : r.status,
+              participantsCount: nextCount,
+              students: nextCount,
+              activeStudents: data.activeStudents !== undefined ? data.activeStudents : r.activeStudents,
+              participants: data.participants || r.participants,
+            };
+          }
+          return r;
+        })
+      );
+    };
+
+    const handleParticipantLeft = (data) => {
+      if (!data?.roomId) return;
+      setRooms((prev) =>
+        prev.map((r) => {
+          if ((r.roomId || r.id)?.toUpperCase() === data.roomId.toUpperCase()) {
+            const nextCount = data.students !== undefined ? data.students : (data.participantsCount !== undefined ? data.participantsCount : Math.max(0, (r.participantsCount || 1) - 1));
+            return {
+              ...r,
+              participantsCount: nextCount,
+              students: nextCount,
+              activeStudents: data.activeStudents !== undefined ? data.activeStudents : r.activeStudents,
+              participants: data.participants || r.participants,
+            };
+          }
+          return r;
+        })
+      );
+    };
+
+    socket.on('ROOM_PARTICIPANTS_UPDATED', handleParticipantsUpdated);
+    socket.on('room_participants_updated', handleParticipantsUpdated);
+    socket.on('ROOM_PARTICIPANT_JOINED', handleParticipantJoined);
+    socket.on('STUDENT_JOINED', handleParticipantJoined);
+    socket.on('participant_joined', handleParticipantJoined);
+    socket.on('ROOM_PARTICIPANT_LEFT', handleParticipantLeft);
+    socket.on('STUDENT_LEFT', handleParticipantLeft);
+    socket.on('participant_left', handleParticipantLeft);
+
+    socket.on('ROOM_ENDED', (data) => {
+      if (!data?.roomId) return;
+      setRooms((prev) =>
+        prev.map((r) => ((r.roomId || r.id)?.toUpperCase() === data.roomId.toUpperCase() ? { ...r, status: 'ENDED' } : r))
+      );
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [user]);
 
   const fetchRooms = async () => {
     setLoading(true);
@@ -136,8 +241,11 @@ export default function RoomManager() {
 
   const handleCandidateJoin = (room) => {
     const roomId = room.roomId || room.id;
-    const token = room.joinCode || '';
-    navigate(`/join/${roomId}${token ? `?token=${token}` : ''}`);
+    const token = room.joinCode || room.joinToken || '';
+    const mode = room.mode || room.sessionType || 'EXAM';
+    const title = room.title || `Monitored Session ${roomId}`;
+    const host = room.ownerName || room.hostName || room.host?.name || 'Session Host';
+    navigate(`/proctor-room/${roomId}?token=${encodeURIComponent(token)}&mode=${encodeURIComponent(mode)}&title=${encodeURIComponent(title)}&host=${encodeURIComponent(host)}&role=candidate`);
   };
 
   const handleHostOpenRoom = (room) => {
@@ -266,23 +374,24 @@ export default function RoomManager() {
             const roomViolations = room.participants?.reduce((acc, p) => acc + (p.violations || 0), 0) || 0;
 
             const currentUserId = String(user?._id || user?.id || '');
-            const isHost = Boolean(
-              !user ||
-              user.role === 'admin' ||
-              (currentUserId && (
+            const isOwner = Boolean(
+              currentUserId && (
                 String(room.ownerId || '') === currentUserId ||
                 String(room.createdBy || '') === currentUserId ||
                 String(room.hostUserId || '') === currentUserId ||
                 String(room.host?.id || '') === currentUserId ||
                 String(room.hostId || '') === currentUserId ||
                 String(room.host || '') === currentUserId
-              )) ||
+              )
+            );
+            const isHost = Boolean(
+              isOwner ||
+              user?.role === 'admin' ||
               (user?.email && (
                 room.ownerEmail === user.email ||
                 room.host?.email === user.email ||
                 room.hostEmail === user.email
-              )) ||
-              true // On owner Virtual Rooms list, these are the user's hosted rooms
+              ))
             );
 
             return (
@@ -323,10 +432,10 @@ export default function RoomManager() {
                   </h3>
 
                   <div className="text-xs text-slate-500 space-y-1">
-                    <p>Host: <span className="font-semibold text-slate-700">{room.ownerName || room.hostName || room.host?.name || 'Session Host'}</span></p>
+                    <p>Host: <span className="font-semibold text-slate-700">{room.ownerName || room.hostName || room.host?.name || (isOwner ? (user?.fullName || user?.name || 'Current User') : 'Session Host')}</span></p>
                     <div className="flex items-center gap-3 text-[11px] text-slate-400 flex-wrap">
                       <span className="flex items-center gap-1 font-medium text-slate-600">
-                        <Users size={12} className={isRoomFull ? 'text-amber-600' : 'text-slate-500'} /> {participantsCount} / {maxCapacity}
+                        <Users size={12} className={isRoomFull ? 'text-amber-600' : 'text-slate-500'} /> {participantsCount} / {maxCapacity} students
                       </span>
                       <span className="flex items-center gap-1 font-medium text-slate-600">
                         <Clock size={12} className="text-slate-500" /> {room.durationMinutes || 60} mins
@@ -363,35 +472,37 @@ export default function RoomManager() {
                       >
                         {copiedId === roomId ? <Check size={13} className="text-emerald-600 font-bold" /> : <Copy size={13} className="text-[#0F172A]" />}
                         <span className={copiedId === roomId ? 'text-emerald-700 font-bold' : ''}>
-                          {copiedId === roomId ? 'Join link copied' : 'Copy Link'}
+                          {copiedId === roomId ? 'Link Copied' : 'Copy Link'}
                         </span>
                       </button>
                     </div>
                   ) : (
                     /* ACTIVE ROOM BUTTONS */
                     <div className="space-y-2">
-                      {isHost ? (
+                      {/* JOIN ROOM - Enter Candidate Monitoring Session */}
+                      <button
+                        onClick={() => handleCandidateJoin(room)}
+                        disabled={isRoomFull}
+                        className={`w-full py-2.5 px-3 rounded-xl text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer ${
+                          isRoomFull
+                            ? 'bg-amber-600 cursor-not-allowed text-white'
+                            : 'bg-[#2563EB] hover:bg-[#1D4ED8] active:bg-blue-800'
+                        }`}
+                        title={isRoomFull ? 'Room has reached maximum capacity' : 'Join Proctoring Session as Candidate / Participant'}
+                      >
+                        <Video size={14} className="text-white" />
+                        <span>{isRoomFull ? 'Room Full' : 'JOIN ROOM'}</span>
+                      </button>
+
+                      {/* OPEN ROOM DASHBOARD (For Room Host / Proctor) */}
+                      {isHost && (
                         <button
                           onClick={() => handleHostOpenRoom(room)}
                           className="w-full py-2.5 px-3 rounded-xl bg-[#10B981] hover:bg-[#059669] active:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
                           title="Open Real-Time Host Monitoring Dashboard"
                         >
                           <Shield size={14} className="text-white" />
-                          <span>Open Room Dashboard</span>
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleCandidateJoin(room)}
-                          disabled={isRoomFull}
-                          className={`w-full py-2.5 px-3 rounded-xl text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer ${
-                            isRoomFull
-                              ? 'bg-amber-600 cursor-not-allowed text-white'
-                              : 'bg-[#10B981] hover:bg-[#059669] active:bg-emerald-700'
-                          }`}
-                          title={isRoomFull ? 'Room has reached maximum capacity' : 'Join Proctoring Session as Candidate'}
-                        >
-                          <Video size={14} className="text-white" />
-                          <span>{isRoomFull ? 'Room Full' : 'Open Room Dashboard'}</span>
+                          <span>OPEN ROOM DASHBOARD</span>
                         </button>
                       )}
 
@@ -403,7 +514,7 @@ export default function RoomManager() {
                         >
                           {copiedId === roomId ? <Check size={13} className="text-emerald-600 font-bold" /> : <Copy size={13} className="text-[#0F172A]" />}
                           <span className={copiedId === roomId ? 'text-emerald-700 font-bold' : ''}>
-                            {copiedId === roomId ? 'Join link copied' : 'Copy Link'}
+                            {copiedId === roomId ? 'Link Copied' : 'COPY LINK'}
                           </span>
                         </button>
 
@@ -413,7 +524,7 @@ export default function RoomManager() {
                           title="Share Room Invitation Link"
                         >
                           <Share2 size={13} className="text-[#0F172A]" />
-                          <span>Share</span>
+                          <span>SHARE</span>
                         </button>
                       </div>
                     </div>
@@ -641,7 +752,21 @@ export default function RoomManager() {
                   </button>
                 </div>
 
-                {/* Open Room Dashboard - Primary Full-Width Action Button */}
+                {/* JOIN ROOM - Creator enters candidate verification / testing flow */}
+                <button
+                  type="button"
+                  id="join-room-modal-btn"
+                  onClick={() => {
+                    handleCandidateJoin(createdRoomModal);
+                    setCreatedRoomModal(null);
+                  }}
+                  className="w-full py-3 px-5 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] active:bg-blue-800 text-white text-sm font-bold flex items-center justify-center gap-2.5 shadow-md transition cursor-pointer"
+                >
+                  <Video size={18} className="text-white shrink-0" />
+                  <span>JOIN ROOM</span>
+                </button>
+
+                {/* Open Room Dashboard - Host/Proctor Dashboard */}
                 <button
                   type="button"
                   id="open-room-dashboard-btn"
@@ -653,7 +778,7 @@ export default function RoomManager() {
                   className="w-full py-3.5 px-5 rounded-xl bg-[#10B981] hover:bg-[#059669] active:bg-emerald-700 text-white text-sm font-extrabold flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/40 border border-emerald-500/60 transition-all duration-150 transform active:scale-[0.99] cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2"
                 >
                   <Shield size={18} className="text-white shrink-0" />
-                  <span>Open Room Dashboard</span>
+                  <span>OPEN ROOM DASHBOARD</span>
                   <ArrowRight size={16} className="text-white shrink-0" />
                 </button>
 
